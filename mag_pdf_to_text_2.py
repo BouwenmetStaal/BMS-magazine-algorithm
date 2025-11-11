@@ -54,7 +54,8 @@ class Line:
 class Article:
     title: str
     intro_lines: List[str] = field(default_factory=list)
-    body_lines: List[str] = field(default_factory=list)
+    body_lines: List[str] = field(default_factory=list) #groter dan 20 woorden?
+    auteurs: List[str] = field(default_factory=list)
 
     def add_intro_line(self, t: str):
         t = t.strip()
