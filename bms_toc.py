@@ -1,16 +1,8 @@
 # -*- coding: utf-8 -*-
-"""
-Created on Mon Nov 24 18:07:27 2025
-
-@author: erikf
-"""
-
 #!/usr/bin/env python3
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
-
 
 import fitz  # PyMuPDF
 
@@ -18,12 +10,47 @@ import fitz  # PyMuPDF
 # ---------- helpers & dataclasses ----------
 
 def clean_text(t: str) -> str:
+    """
+    Normalize extracted PDF text into a single readable line.
+
+    Why this exists:
+    - PyMuPDF can emit runs with irregular spacing and carriage returns.
+    - Downstream parsing (TOC detection, role classification) expects
+      stable whitespace.
+
+    Behavior:
+    - Replace carriage returns with a space
+    - Collapse all whitespace to single spaces
+    - Trim leading/trailing spaces
+    """
     t = t.replace("\r", " ")
     return re.sub(r"\s+", " ", t).strip()
 
 
 @dataclass
 class TocLine:
+    """
+    One *visual line* of text extracted from the TOC page.
+
+    This is the raw unit we parse into articles. We store both:
+    - the readable text (already whitespace-normalized)
+    - its geometry (bbox) so we can:
+        * split left vs right column via x position
+        * keep reading order (y then x)
+    - the underlying spans so we can classify role by font/size.
+
+    Attributes
+    ----------
+    text:
+        Cleaned text of the line (concatenated from spans).
+    bbox:
+        Bounding box of the full line: (x0, y0, x1, y1) in PDF points.
+    spans:
+        Raw PyMuPDF span dictionaries for this line (font, size, bbox, etc.).
+        Used for font-based role classification (title/subtitle/author).
+    page:
+        0-based PDF page index where this line was extracted (the TOC page).
+    """
     text: str
     bbox: Tuple[float, float, float, float]
     spans: List[Dict[str, Any]]
@@ -31,29 +58,79 @@ class TocLine:
 
     @property
     def x_center(self) -> float:
+        """
+        Horizontal midpoint of the line.
+
+        Used for:
+        - splitting the TOC into left and right columns
+        - secondary sort key for stable reading order
+        """
         x0, _, x1, _ = self.bbox
         return 0.5 * (x0 + x1)
 
     @property
     def y_top(self) -> float:
+        """
+        Top y-coordinate of the line.
+
+        Used as the primary sort key (top-to-bottom reading order).
+        """
         _, y0, _, _ = self.bbox
         return y0
 
 
-
-
-
 @dataclass
 class ArticleInfo:
-    section: str           # "Projecten" / "Techniek"
+    """
+    Parsed metadata for a single article, primarily from the TOC.
+
+    This object is created in bms_toc.py (TOC parsing) and then *enriched*
+    in bms_article_text.py (text extraction) with PDF page range fields.
+
+    Attributes
+    ----------
+    section:
+        Which TOC section the article belongs to. Currently "Projecten" or "Techniek".
+    page:
+        Printed start page number as shown in the magazine (from TOC).
+        Not the PDF index. Mapping to PDF happens via Magazine.pdf_index_offset.
+    title / subtitle:
+        Article title and optional subtitle from TOC.
+        Multi-line titles/subtitles are concatenated during parsing.
+    author:
+        Raw author line as extracted from TOC (single string).
+    authors:
+        Parsed list of individual author names (split from `author`).
+        Used for cleaner metadata output later.
+
+    Enrichment fields (filled by text extraction)
+    ---------------------------------------------
+    start_page_pdf:
+        0-based PDF index where the article starts.
+    end_page:
+        Printed end page (inclusive), derived from end_page_pdf and pdf_index_offset.
+    end_page_pdf:
+        0-based PDF index where the article ends (last page that contained content).
+    """
+    section: str
     page: Optional[int] = None
     title: str = ""
     subtitle: str = ""
     author: str = ""
     authors: List[str] = field(default_factory=list)
-    # you can keep pdf_index here or add later if you want
+
+    # Filled later by the article text extractor (bms_article_text.py)
+    start_page_pdf: Optional[int] = None
+    end_page: Optional[int] = None
+    end_page_pdf: Optional[int] = None
 
     def pretty(self) -> str:
+        """
+        Human-readable multi-line summary for debugging/logging.
+
+        Note:
+        - Prefers `authors` list if available; otherwise falls back to raw `author`.
+        """
         out = [f"[{self.section}]"]
         if self.page is not None:
             out.append(f"  Page    : {self.page}")
@@ -70,14 +147,35 @@ class ArticleInfo:
 @dataclass
 class Magazine:
     """
-    Eén nummer van Bouwen met Staal.
+    Container for one full Bouwen met Staal issue (one PDF).
 
-    issue_number       : bijvoorbeeld 305
-    release_year       : bijvoorbeeld 2025
-    release_month      : bijvoorbeeld 3 (maart)
-    original_label     : originele tekst uit de footer, bijv. 'MAART 2025'
-    pdf_index_offset   : verschil tussen PDF index en gedrukte pagina
-    articles           : alle artikelen in de TOC
+    This is the shared “data contract” between:
+    - bms_toc.py (builds the object + TOC-derived metadata)
+    - bms_article_text.py (uses pdf_index_offset to map printed pages -> PDF indices
+      and fills page ranges per ArticleInfo)
+    - bms_run_extraction.py (batch runner exporting one TXT per article)
+
+    Attributes
+    ----------
+    issue_number:
+        Issue number from footer on the TOC page (e.g. 305). Optional because
+        footer parsing can fail on malformed scans.
+    release_year / release_month:
+        Parsed from footer label (e.g. MAART 2025 -> month=3, year=2025).
+    original_label:
+        Raw month-year label as printed (e.g. 'MAART 2025').
+    pdf_index_offset:
+        Mapping between printed page numbers and 0-based PDF page indices.
+
+        Definition:
+            pdf_index_offset = toc_page_index - toc_printed_page
+
+        So for any printed page P:
+            pdf_index = P + pdf_index_offset
+
+        This is the core link that lets the extractor jump to the correct PDF page.
+    articles:
+        All articles parsed from the TOC (both sections). Each is an ArticleInfo.
     """
     issue_number: Optional[int]
     release_year: Optional[int]
@@ -98,6 +196,19 @@ MONTHS_NL = {
 # ---------- your existing TOC finder (relaxed with left/right) ----------
 
 def find_toc(doc: fitz.Document) -> int | None:
+    """
+    Locate the TOC page within a magazine PDF.
+    
+    Heuristic:
+    - Find a page where 'Projecten' appears in the left half
+      and 'Techniek' appears in the right half (same page).
+    
+    Input:
+      doc: open PyMuPDF document.
+    
+    Output:
+      0-based PDF page index of the TOC page, or None if not found.
+    """
     for pno in range(len(doc)):
         page = doc[pno]
         pw, ph = page.rect.width, page.rect.height
@@ -145,6 +256,21 @@ def find_toc(doc: fitz.Document) -> int | None:
 # ---------- collect lines on TOC page ----------
 
 def collect_toc_lines(doc: fitz.Document, pno: int) -> List[TocLine]:
+    """
+    Extract all readable text lines from the TOC page as TocLine objects.
+
+    What it does:
+    - Reads PyMuPDF 'dict' text structure for the given page
+    - Builds TocLine items with text + bbox + spans (needed for font-based parsing)
+    - Sorts lines in a stable reading order (top-to-bottom, then left-to-right)
+
+    Inputs:
+      doc: open PyMuPDF document
+      pno: 0-based PDF page index (must be the TOC page)
+
+    Output:
+      List of TocLine entries for that page.
+    """
     page = doc[pno]
     data = page.get_text("dict")
     lines: List[TocLine] = []
@@ -176,6 +302,19 @@ def collect_toc_lines(doc: fitz.Document, pno: int) -> List[TocLine]:
 # ---------- find header Y for Projecten / Techniek ----------
 
 def find_header_y(lines: List[TocLine], keyword: str) -> float:
+    """
+    Find the vertical position (y) of a section header on the TOC page.
+
+    Used to ignore everything above the 'Projecten'/'Techniek' header line when
+    parsing the column content below it.
+
+    Inputs:
+      lines: TocLine list from the TOC page
+      keyword: header keyword to find (case-insensitive)
+
+    Output:
+      y_top of the first matching line, or 0.0 if not found.
+    """
     ys = [ln.y_top for ln in lines if keyword.lower() in ln.text.lower()]
     return min(ys) if ys else 0.0
 
@@ -184,10 +323,20 @@ def find_header_y(lines: List[TocLine], keyword: str) -> float:
 
 def classify_role(line: TocLine) -> str:
     """
-    Titel:   Univers LT Std, size ≈ 12/10
-    Subtitel:Minion Pro,     size ≈ 12
-    Auteur:  Univers LT Std, size ≈ 7/7.5
+    Classify a TOC line as 'title', 'subtitle', 'author', or 'other' using fonts.
+
+    Bigger picture:
+    - TOC parsing relies on typography: titles/subtitles/authors use different
+      fonts and sizes in the magazine layout.
+    - This function converts the raw spans of a TocLine into a semantic role.
+
+    Input:
+      line: TocLine with span font/size info
+
+    Output:
+      One of: 'title', 'subtitle', 'author', 'other'
     """
+
     is_title = False
     is_subtitle = False
     is_author = False
@@ -219,7 +368,16 @@ def classify_role(line: TocLine) -> str:
 
 def split_page_prefix(text: str) -> tuple[Optional[int], str]:
     """
-    Haal een  paginanummer aan het begin van de regel weg.
+    Parse a TOC title line that may start with a printed page number.
+
+    Example:
+      '12 Een nieuw project' -> (12, 'Een nieuw project')
+
+    Input:
+      text: raw line text from the TOC
+
+    Output:
+      (page_number_or_None, remaining_text_without_prefix)
     """
     t = text.replace("\u00a0", " ")
     m = re.match(r"^\s*(\d{1,2})(.*)$", t)
@@ -233,13 +391,23 @@ def split_page_prefix(text: str) -> tuple[Optional[int], str]:
 
 def extract_magazine_from_toc(doc, toc_page_index, articles):
     """
-    Extract magazine metadata from the footer line on the TOC page.
+    Extract issue-level metadata from the TOC page footer and build a Magazine.
 
-    Expected format on the bottom-left:
-        'BOUWEN MET STAAL XXX | MAAND JAAR'
+    What it does:
+    - Reads the TOC page footer to find:
+        * issue number (e.g. 305)
+        * release month/year label (e.g. MAART 2025)
+        * printed page number shown in the footer row
+    - Computes pdf_index_offset to map printed pages -> PDF indices.
+    - Returns a Magazine object containing the parsed articles list.
 
-    And on the same height (bottom-right):
-        '<printed page number>'
+    Inputs:
+      doc: open PyMuPDF document
+      toc_page_index: 0-based PDF page index where the TOC was found
+      articles: list of ArticleInfo already parsed from the TOC columns
+
+    Output:
+      Magazine object (with pdf_index_offset possibly None if footer parsing fails).
     """
 
     page = doc[toc_page_index]
@@ -373,8 +541,38 @@ def extract_magazine_from_toc(doc, toc_page_index, articles):
 
 
 def parse_column(lines: List[TocLine], section: str) -> List[ArticleInfo]:
+    """
+    Parse one TOC column (either Projecten or Techniek) into ArticleInfo objects.
+
+    How it works (high level):
+    - Walk through TocLine entries in reading order
+    - Use classify_role() to assign title/subtitle/author lines to an article
+    - Start a new ArticleInfo when a new title appears after a completed article
+    - Protect against footer mis-detection by requiring authors to appear close
+      below the last title/subtitle (MAX_AUTHOR_VERTICAL_GAP)
+
+    Inputs:
+      lines: TocLine entries belonging to a single column and section area
+      section: section label to store in each ArticleInfo
+
+    Output:
+      List of ArticleInfo for that column.
+    """
+
+    # Maximum allowed vertical distance (in PDF points) between the last
+    # title/subtitle and its author line. In the magazine layout, the real
+    # author block sits only a few lines below the title/subtitle
+    # (~30–40 pt). The footer is much further away (>150 pt).
+    # 80 pt is a safe upper bound that captures the real author lines,
+    # but excludes the distant footer text.
+    MAX_AUTHOR_VERTICAL_GAP = 80.0
+
     articles: List[ArticleInfo] = []
     cur: Optional[ArticleInfo] = None
+
+    # Track the vertical position of the last header line (title or subtitle)
+    # for the current article. Author lines must stay close to this anchor.
+    current_header_y: Optional[float] = None
 
     for ln in lines:
         role = classify_role(ln)   # unchanged
@@ -403,6 +601,9 @@ def parse_column(lines: List[TocLine], section: str) -> List[ArticleInfo]:
             else:
                 cur.title = title_txt
 
+            # update header anchor for this article
+            current_header_y = ln.y_top
+
         elif role == "subtitle":
             if cur is None:
                 cur = ArticleInfo(section=section)
@@ -411,9 +612,23 @@ def parse_column(lines: List[TocLine], section: str) -> List[ArticleInfo]:
             else:
                 cur.subtitle = raw_txt
 
+            # subtitle also acts as the nearest header anchor
+            current_header_y = ln.y_top
+
         elif role == "author":
             if cur is None:
                 cur = ArticleInfo(section=section)
+
+            # New: enforce maximum vertical distance from last header line.
+            # If the candidate author line is too far below the last title/
+            # subtitle, we assume it is not part of this article (e.g. footer)
+            # and skip it.
+            if current_header_y is not None:
+                dy = ln.y_top - current_header_y
+                if dy > MAX_AUTHOR_VERTICAL_GAP:
+                    # too far away from the article header -> ignore
+                    continue
+
             if cur.author:
                 cur.author = (cur.author + " " + raw_txt).strip()
             else:
@@ -427,6 +642,7 @@ def parse_column(lines: List[TocLine], section: str) -> List[ArticleInfo]:
         articles.append(cur)
 
     return articles
+
 
 
 def split_authors_text(author_text: str) -> List[str]:
@@ -464,6 +680,23 @@ def split_authors_text(author_text: str) -> List[str]:
 
 
 def build_magazine_from_pdf(doc):
+    """
+    High-level entry point: build a Magazine object from a PDF.
+
+    Pipeline:
+    1) Find the TOC page
+    2) Extract all TOC lines (geometry + spans)
+    3) Split lines into left/right columns and parse into articles
+    4) Parse authors into a list
+    5) Extract footer metadata and compute pdf_index_offset
+    6) Return a complete Magazine container
+
+    Input:
+      doc: open PyMuPDF document
+
+    Output:
+      Magazine with articles filled; pdf_index_offset may be None if footer parsing fails.
+    """
     toc_page = find_toc(doc)
     if toc_page is None:
         raise ValueError("Geen TOC-pagina gevonden.")
