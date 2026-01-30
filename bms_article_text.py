@@ -115,14 +115,16 @@ def compute_pdf_index_for_article(magazine: Magazine, article: ArticleInfo) -> i
     """
 
     if article.page is None:
-        raise ValueError(f"Article '{article.title}' has no page number from TOC.")
+        #raise ValueError(f"BMS-{magazine.issue_number}, Article '{article.title}' has no page number from TOC.")
+        print(f"[ERROR] BMS-{magazine.issue_number}, Article '{article.title}' has no page number from TOC.")
+        return -1
     if magazine.pdf_index_offset is None:
-        raise ValueError("Magazine.pdf_index_offset is None.")
+        raise ValueError(f"BMS-{magazine.issue_number}, Magazine.pdf_index_offset is None.")
 
     pdf_index = article.page + magazine.pdf_index_offset
     if pdf_index < 0:
         raise ValueError(
-            f"Computed negative pdf_index={pdf_index} "
+            f"BMS-{magazine.issue_number}, Computed negative pdf_index={pdf_index} "
             f"(page={article.page}, offset={magazine.pdf_index_offset})"
         )
     return pdf_index
@@ -146,7 +148,7 @@ def get_article_start_page(doc: fitz.Document, magazine: Magazine, article: Arti
     idx = compute_pdf_index_for_article(magazine, article)
     if idx >= len(doc):
         raise ValueError(
-            f"pdf_index={idx} out of range for document with {len(doc)} pages."
+            f"BMS-{magazine.issue_number}, pdf_index={idx} out of range for document with {len(doc)} pages."
         )
     return doc[idx]
 

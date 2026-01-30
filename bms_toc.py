@@ -698,8 +698,10 @@ def build_magazine_from_pdf(doc):
       Magazine with articles filled; pdf_index_offset may be None if footer parsing fails.
     """
     toc_page = find_toc(doc)
+    
+    editionnumber = doc.name.split('\\')[-1].split('_')[0]
     if toc_page is None:
-        raise ValueError("Geen TOC-pagina gevonden.")
+        raise ValueError(f"BMS-{editionnumber}, Geen TOC-pagina gevonden.")
 
     lines = collect_toc_lines(doc, toc_page)
     page = doc[toc_page]

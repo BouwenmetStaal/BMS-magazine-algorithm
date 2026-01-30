@@ -16,7 +16,7 @@ Role in the 3-script pipeline:
 
 Current output (intermediate format):
   - One UTF-8 .txt file per article, stored in:
-        C:\\BMS_C_Locatie\\AI_Project\\XML_test\\<issue>_article_txt\\
+        C:\\BMS_C_Locatie\\AI_Project\\XML_test\\<issue>_articles_txt\\
   - Each file contains:
         (A) a metadata header (title, section, authors, page ranges)
         (B) the cleaned article text
@@ -36,12 +36,14 @@ import fitz  # PyMuPDF
 
 from bms_toc import build_magazine_from_pdf, ArticleInfo, Magazine
 from bms_article_text import extract_article_text_plain
+import json
 
 
 # ---------------------------------------------------------------------------
 # Helper: build the metadata header (same content as the old single-article
 # runner, just factored into a reusable function for the batch loop).
 # ---------------------------------------------------------------------------
+
 
 def build_article_metadata(magazine: Magazine, article: ArticleInfo) -> str:
     """
@@ -52,15 +54,15 @@ def build_article_metadata(magazine: Magazine, article: ArticleInfo) -> str:
     - Edition and Release
     - Printed page range
     - PDF page range (index and 1-based display)
-    
-    
+
+
     Inputs:
       magazine: issue-level metadata and printed->PDF mapping
       article: article-level metadata + extracted page range fields (if available)
 
     Output:
       A multi-line UTF-8 string containing human-readable metadata.
-    
+
     """
     # Printed start page (from TOC)
     printed_start = article.page
@@ -70,7 +72,9 @@ def build_article_metadata(magazine: Magazine, article: ArticleInfo) -> str:
         pdf_start_index = article.start_page_pdf
     else:
         if printed_start is None or magazine.pdf_index_offset is None:
-            raise ValueError("Cannot determine PDF start index for article.")
+            raise ValueError(
+                f"BMS-{magazine.issue_number}, Cannot determine PDF start index for article."
+            )
         pdf_start_index = printed_start + magazine.pdf_index_offset
 
     # End PDF index: from extractor, fallback to start if missing
@@ -146,15 +150,16 @@ def build_article_metadata(magazine: Magazine, article: ArticleInfo) -> str:
 # Helper: determine output folder name for a magazine
 # ---------------------------------------------------------------------------
 
+
 def get_issue_folder_name(magazine: Magazine, pdf_path: Path) -> str:
     """
     Determine the output subfolder name for one issue.
 
     Preferred:
-      '<xxx>_article_txt' where xxx is the 3-digit issue number (e.g. 305_article_txt)
+      '<xxx>_articles_txt' where xxx is the 3-digit issue number (e.g. 305_articles_txt)
 
     Fallback:
-      '<pdf_stem>_article_txt' when the issue number could not be parsed.
+      '<pdf_stem>_articles_txt' when the issue number could not be parsed.
 
     Inputs:
       magazine: used for issue_number
@@ -168,17 +173,16 @@ def get_issue_folder_name(magazine: Magazine, pdf_path: Path) -> str:
 
     if issue_number is not None:
         issue_str = f"{issue_number:03d}"
-        return f"{issue_str}_article_txt"
+        return f"{issue_str}_articles_txt"
     else:
         # Fallback: use the filename stem and notify via print in caller.
-        return f"{pdf_path.stem}_article_txt"
-
-
+        return f"{pdf_path.stem}_articles_txt"
 
 
 # ---------------------------------------------------------------------------
 # Helper: Check low hyphenation, indicating errors in text
 # ---------------------------------------------------------------------------
+
 
 def check_low_hyphenation_signal(
     text: str,
@@ -186,21 +190,21 @@ def check_low_hyphenation_signal(
     min_hyphens_per_1000: float = 1.0,
 ) -> tuple[bool, int, int, float]:
     """
-     Quality signal used by the runner to flag suspicious extractions.
-    
-     Why:
-       - Articles normally contain a baseline amount of hyphen characters.
-       - Unusually low hyphen density can indicate extraction issues
-         (missed hyphen joins, column order problems, skipped content).
-    
-     Inputs:
-       text: final extracted article text
-       thresholds: only evaluate sufficiently long texts
-    
-     Output:
-       (is_low, hyphen_count, total_chars, hyphens_per_1000)
-       Used to build a compact per-issue warning overview.
-     """
+    Quality signal used by the runner to flag suspicious extractions.
+
+    Why:
+      - Articles normally contain a baseline amount of hyphen characters.
+      - Unusually low hyphen density can indicate extraction issues
+        (missed hyphen joins, column order problems, skipped content).
+
+    Inputs:
+      text: final extracted article text
+      thresholds: only evaluate sufficiently long texts
+
+    Output:
+      (is_low, hyphen_count, total_chars, hyphens_per_1000)
+      Used to build a compact per-issue warning overview.
+    """
     if not text:
         return False, 0, 0, 0.0
 
@@ -209,10 +213,10 @@ def check_low_hyphenation_signal(
         return False, 0, total_chars, 0.0
 
     hyphen_chars = [
-        "-",        # hyphen-minus
-        "\u2011",   # non-breaking hyphen
-        "\u00AD",   # soft hyphen
-        "–",        # en dash (sometimes used as hyphen)
+        "-",  # hyphen-minus
+        "\u2011",  # non-breaking hyphen
+        "\u00ad",  # soft hyphen
+        "–",  # en dash (sometimes used as hyphen)
     ]
 
     hyphen_count = sum(text.count(h) for h in hyphen_chars)
@@ -222,11 +226,10 @@ def check_low_hyphenation_signal(
     return is_low, hyphen_count, total_chars, hyphens_per_1000
 
 
-
-
 # ---------------------------------------------------------------------------
 # Process a single magazine PDF
 # ---------------------------------------------------------------------------
+
 
 def process_magazine_pdf(pdf_path: Path, base_output_dir: Path) -> None:
     """
@@ -277,6 +280,16 @@ def process_magazine_pdf(pdf_path: Path, base_output_dir: Path) -> None:
     exported_count = 0
     low_hyphenation_hits: list[dict] = []
 
+    # Build magazine-level JSON metadata
+    magazine_json = {
+        "issue_number": magazine.issue_number,
+        "release_month": magazine.release_month,
+        "release_year": magazine.release_year,
+        "pdf_index_offset": magazine.pdf_index_offset,
+        "total_articles": len(magazine.articles),
+        "articles": [],
+    }
+
     # Loop over all articles and export each to a TXT file
     for idx, article in enumerate(magazine.articles, start=1):
         # Extract article text (this also fills start/end PDF page info)
@@ -303,7 +316,7 @@ def process_magazine_pdf(pdf_path: Path, base_output_dir: Path) -> None:
         metadata_text = build_article_metadata(magazine, article)
         full_output = metadata_text + article_text
 
-        # File name pattern: <issue>_article_<nn>.txt
+        # File name pattern: <issue>_article_<nn>.txt and .json
         issue_number = magazine.issue_number
         if issue_number is not None:
             issue_str = f"{issue_number:03d}"
@@ -313,15 +326,58 @@ def process_magazine_pdf(pdf_path: Path, base_output_dir: Path) -> None:
         article_filename = f"{issue_str}_article_{idx:02d}.txt"
         output_path = issue_output_dir / article_filename
 
+        # Write TXT output
         output_path.write_text(full_output, encoding="utf-8")
+
+        # Write JSON output
+
+        json_data = {
+            "metadata": {
+                "title": article.title,
+                "subtitle": article.subtitle,
+                "section": article.section,
+                "authors": getattr(article, "authors", None)
+                or (
+                    [getattr(article, "author", "")]
+                    if getattr(article, "author", "")
+                    else []
+                ),
+                "edition": f"Bouwen met Staal {magazine.issue_number}",
+                "release_month": magazine.release_month,
+                "release_year": magazine.release_year,
+                "printed_page_start": article.page,
+                "printed_page_end": article.end_page,
+                "pdf_page_start_index": article.start_page_pdf,
+                "pdf_page_end_index": article.end_page_pdf,
+            },
+            "text": article_text,
+        }
+
+        # Add article to magazine JSON
+        magazine_json["articles"].append(json_data)
+
         exported_count += 1
 
+    
+    # Save magazine-level JSON after processing all articles
+    magazine_json_filename = f"{issue_str}_magazine.json"
+    magazine_json_path = issue_output_dir / magazine_json_filename
+    magazine_json_path.write_text(
+            json.dumps(magazine_json, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
     # Summary per PDF
-    issue_str = f"{magazine.issue_number}" if magazine.issue_number is not None else pdf_path.stem
+    issue_str = (
+        f"{magazine.issue_number}"
+        if magazine.issue_number is not None
+        else pdf_path.stem
+    )
     warn_count = len(low_hyphenation_hits)
 
     if warn_count == 0:
-        print(f"[DONE] Issue {issue_str}: exported {exported_count} article(s). No hyphenation warnings.")
+        print(
+            f"[DONE] Issue {issue_str}: exported {exported_count} article(s). No hyphenation warnings."
+        )
     else:
         print(
             f"[DONE] Issue {issue_str}: exported {exported_count} article(s). "
@@ -334,10 +390,10 @@ def process_magazine_pdf(pdf_path: Path, base_output_dir: Path) -> None:
             )
 
 
-
 # ---------------------------------------------------------------------------
 # Main entry point: batch over all PDFs in the magazine directory
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     """
@@ -349,21 +405,22 @@ def main() -> None:
     - Outputs TXT files under:
         C:\\BMS_C_Locatie\\AI_Project\\XML_test\\...
     """
-    
-    #------------------ Locatie aanpassen --------------------------
-    
-    magazine_dir = Path(r"C:\Users\AJOR\Bouwen met Staal\ChatBmS - General\Archief_BMS_magazines [Erik]\Magazine_compleet_archief\2025 (303-308)")   #locatie Aanpassen naar eigen voorkeur
-    base_output_dir = Path(r"C:\Users\AJOR\Documents\BMS_algortime_testfolder")  
 
-    #---------------------------------------------------------------
+    # ------------------ Locatie aanpassen --------------------------
+
+    magazine_dir = Path(
+        r"C:\Users\AJOR\Bouwen met Staal\ChatBmS - General\Archief_BMS_magazines [Erik]\Magazine_compleet_archief\2025 (303-308)"
+    )  # locatie Aanpassen naar eigen voorkeur
+    # magazine_dir = Path(r"C:\Users\AJOR\Bouwen met Staal\ChatBmS - General\Archief_BMS_magazines [Erik]\Magazine_compleet_archief\2007 (195-200)")
+    base_output_dir = Path(r"C:\Users\AJOR\Documents\BMS_algortime_testfolder")
+
+    # ---------------------------------------------------------------
 
     # Ensure base output directory exists
     base_output_dir.mkdir(parents=True, exist_ok=True)
 
     if not magazine_dir.is_dir():
-        raise FileNotFoundError(
-            f"Magazine directory not found: {magazine_dir}"
-        )
+        raise FileNotFoundError(f"Magazine directory not found: {magazine_dir}")
 
     pdf_files = sorted(magazine_dir.glob("*.pdf"))
 
