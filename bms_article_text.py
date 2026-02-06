@@ -22,6 +22,7 @@ XML export can be added later.
 
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
+from enums import TextType
 
 import re
 import textwrap
@@ -33,7 +34,7 @@ from bms_toc import Magazine, ArticleInfo, build_magazine_from_pdf
 
 # --- basic helpers / constants ------------------------------------------------
 
-RELEVANT_SIZE_MIN = 8.5   # main text ~9 pt
+RELEVANT_SIZE_MIN = 8.5  # main text ~9 pt
 RELEVANT_SIZE_MAX = 9.5
 COLUMN_GAP_THRESHOLD = 60.0  # distance in points to separate columns (tweak if needed)
 
@@ -77,16 +78,20 @@ class ArticleBlock:
     """
     Logical unit in the extracted article flow.
 
-    kind:
-      - 'intro'       : introductory lines (Univers bold 9 before body starts)
-      - 'subheading'  : section headers (Univers bold 9 after body has started)
-      - 'paragraph'   : main body flow (primarily Minion 9; still line-based)
+    Attributes:
+        texttype: Classification of this block (INTRO, SUBHEADING, or PARAGRAPH)
+        text: The actual text content of this block
+        page: PDF page index where this block was found
+        column: Column index (0-2) within the page
+        order_index: Sequential position in the article's reading flow
 
-    Stored with page/column/order to support stable reading order and
-    downstream post-processing (header merging, hyphen fixes, reflow).
+    Purpose:
+        Represents a classified segment of article text with metadata needed
+        for stable reading order and downstream post-processing (header merging,
+        hyphen fixes, paragraph reflow).
     """
 
-    kind: str
+    texttype: TextType
     text: str
     page: int
     column: int
@@ -115,11 +120,15 @@ def compute_pdf_index_for_article(magazine: Magazine, article: ArticleInfo) -> i
     """
 
     if article.page is None:
-        #raise ValueError(f"BMS-{magazine.issue_number}, Article '{article.title}' has no page number from TOC.")
-        print(f"[ERROR] BMS-{magazine.issue_number}, Article '{article.title}' has no page number from TOC.")
+        # raise ValueError(f"BMS-{magazine.issue_number}, Article '{article.title}' has no page number from TOC.")
+        print(
+            f"[ERROR] BMS-{magazine.issue_number}, Article '{article.title}' has no page number from TOC."
+        )
         return -1
     if magazine.pdf_index_offset is None:
-        raise ValueError(f"BMS-{magazine.issue_number}, Magazine.pdf_index_offset is None.")
+        raise ValueError(
+            f"BMS-{magazine.issue_number}, Magazine.pdf_index_offset is None."
+        )
 
     pdf_index = article.page + magazine.pdf_index_offset
     if pdf_index < 0:
@@ -130,7 +139,9 @@ def compute_pdf_index_for_article(magazine: Magazine, article: ArticleInfo) -> i
     return pdf_index
 
 
-def get_article_start_page(doc: fitz.Document, magazine: Magazine, article: ArticleInfo) -> fitz.Page:
+def get_article_start_page(
+    doc: fitz.Document, magazine: Magazine, article: ArticleInfo
+) -> fitz.Page:
     """
     Convenience wrapper returning the fitz.Page where an article starts.
 
@@ -319,11 +330,12 @@ def assign_columns(lines: List[ArticlePageLine]) -> None:
         ln.column_index = distances.index(min(distances))
 
 
-
 # --- classification & end marker ----------------------------------------------
 
 
-def classify_line_kind(line: ArticlePageLine, body_seen: bool) -> Optional[str]:
+def determine_line_texttype(
+    line: ArticlePageLine, body_seen: bool
+) -> Optional[TextType]:
     """
     Classify a relevant line into the article structure: intro, subheading, or body.
 
@@ -338,7 +350,7 @@ def classify_line_kind(line: ArticlePageLine, body_seen: bool) -> Optional[str]:
       body_seen: whether body text has already started
 
     Output:
-      'intro' | 'subheading' | 'body' or None if not relevant.
+      TextType.INTRO | TextType.SUBHEADING | TextType.BODY or None if not relevant.
     """
 
     if not is_relevant_main_text(line):
@@ -346,23 +358,20 @@ def classify_line_kind(line: ArticlePageLine, body_seen: bool) -> Optional[str]:
 
     # Pure Minion 9 -> body text
     if line.has_minion and not line.has_univers:
-        return "body"
+        return TextType.BODY
 
     # Univers 9 (bold or not) without Minion mixed in
     if line.has_univers and not line.has_minion:
         if line.is_bold_like:
             # Bold Univers 9: intro before body, subheading after body
             if not body_seen:
-                return "intro"
-            return "subheading"
+                return TextType.INTRO
+            return TextType.SUBHEADING
         else:
             # Non-bold Univers 9 -> treat as body text
-            return "body"
-
+            return TextType.BODY
     # Mixed fonts or anything else in 9 pt -> body
-    return "body"
-
-
+    return TextType.BODY
 
 
 def check_end_marker(line: ArticlePageLine) -> Tuple[bool, str]:
@@ -425,12 +434,12 @@ def check_end_marker(line: ArticlePageLine) -> Tuple[bool, str]:
     return True, trimmed
 
 
-
-
 # --- main extraction logic ----------------------------------------------------
 
 
-def extract_article_blocks(doc: fitz.Document, magazine: Magazine, article: ArticleInfo) -> Tuple[List[ArticleBlock], int]:
+def extract_article_blocks(
+    doc: fitz.Document, magazine: Magazine, article: ArticleInfo
+) -> Tuple[List[ArticleBlock], int]:
     """
     Extract an article as an ordered stream of ArticleBlock objects.
 
@@ -477,28 +486,27 @@ def extract_article_blocks(doc: fitz.Document, magazine: Magazine, article: Arti
         candidate_lines.sort(key=lambda ln: (ln.column_index or 0, ln.y_top))
 
         for ln in candidate_lines:
-            kind = classify_line_kind(ln, body_seen)
-            if kind is None:
+            texttype = determine_line_texttype(ln, body_seen)
+            if texttype is None:
                 continue
 
-            if kind == "body":
+            if texttype is TextType.BODY:
                 body_seen = True
 
             is_end, cleaned_text = check_end_marker(ln)
 
-            # map 'body' to 'paragraph' for block kind
-            block_kind = "paragraph"
-            if kind == "intro":
-                block_kind = "intro"
-            elif kind == "subheading":
-                block_kind = "subheading"
-
+            # map 'body' to 'paragraph' for block textype
+            block_texttype = TextType.PARAGRAPH #DEFAULT
+            if texttype is TextType.INTRO:
+                block_texttype = TextType.INTRO
+            elif texttype is TextType.SUBHEADING:
+                block_texttype = TextType.SUBHEADING
             # This page definitely contains article content
             last_page_with_content = page_index
 
             blocks.append(
                 ArticleBlock(
-                    kind=block_kind,
+                    texttype=block_texttype,
                     text=cleaned_text,
                     page=page_index,
                     column=ln.column_index or 0,
@@ -532,14 +540,15 @@ def extract_article_blocks(doc: fitz.Document, magazine: Magazine, article: Arti
     return blocks, last_page_with_content
 
 
-
 # --- Removing Hyphened text --------------------------------------------------
-def fix_hyphenation_across_block_breaks(blocks: List[ArticleBlock]) -> List[ArticleBlock]:
+def fix_hyphenation_across_block_breaks(
+    blocks: List[ArticleBlock],
+) -> List[ArticleBlock]:
     """
     Fix word breaks caused by line/column breaks *between consecutive blocks*.
 
     Only merges when:
-      - consecutive blocks are same kind (intro/subheading/paragraph)
+      - consecutive blocks are same texttype (intro/subheading/paragraph)
       - first ends with a hyphen-like character
       - next starts with letters
 
@@ -550,7 +559,6 @@ def fix_hyphenation_across_block_breaks(blocks: List[ArticleBlock]) -> List[Arti
       New list of blocks with safe cross-break hyphenation repaired.
     """
 
-
     import re
 
     if not blocks:
@@ -560,7 +568,7 @@ def fix_hyphenation_across_block_breaks(blocks: List[ArticleBlock]) -> List[Arti
     hyphen_chars = r"\-\u00AD\u2010\u2011\u2012\u2013\u2014"  # - soft hyphen ‐ - ‒ – —
 
     # We only merge inside the same logical flow type to avoid cross-type surprises
-    mergeable_kinds = {"paragraph", "intro", "subheading"}
+    mergeable_texttypes = {TextType.PARAGRAPH, TextType.INTRO, TextType.SUBHEADING}
 
     # Capture: (prefix)(letters)(hyphen-like)(optional trailing junk)
     # We require the hyphen-like char to be at the *end* of the block text.
@@ -580,18 +588,14 @@ def fix_hyphenation_across_block_breaks(blocks: List[ArticleBlock]) -> List[Arti
     n = len(blocks)
 
     while i < n:
-        cur = blocks[i]
+        current = blocks[i]
 
         # Default: keep current block
-        if (
-            cur.kind in mergeable_kinds
-            and i + 1 < n
-            and blocks[i + 1].kind == cur.kind
-        ):
+        if current.texttype in mergeable_texttypes and i + 1 < n and blocks[i + 1].texttype is current.texttype:
             nxt = blocks[i + 1]
 
-            cur_text = (cur.text or "").rstrip()
-            nxt_text = (nxt.text or "")
+            cur_text = (current.text or "").rstrip()
+            nxt_text = nxt.text or ""
 
             m1 = re_end_hyphen.match(cur_text)
             m2 = re_start_letters.match(nxt_text)
@@ -608,25 +612,20 @@ def fix_hyphenation_across_block_breaks(blocks: List[ArticleBlock]) -> List[Arti
                 # Keep a single block; consume the next one
                 fixed.append(
                     ArticleBlock(
-                        kind=cur.kind,
+                        texttype=current.texttype,
                         text=merged_text,
-                        page=cur.page,
-                        column=cur.column,
-                        order_index=cur.order_index,
+                        page=current.page,
+                        column=current.column,
+                        order_index=current.order_index,
                     )
                 )
                 i += 2
                 continue
 
-        fixed.append(cur)
+        fixed.append(current)
         i += 1
 
     return fixed
-
-
-
-
-
 
 
 def _dehyphenate_and_reflow(text: str, width: int = 80) -> str:
@@ -646,13 +645,10 @@ def _dehyphenate_and_reflow(text: str, width: int = 80) -> str:
       Cleaned, reflowed plain text.
     """
 
-
-
     # Normalize common problematic Unicode whitespace early
     text = (
-        text
-        .replace("\u00AD", "")   # soft hyphen
-        .replace("\u00A0", " ")  # non-breaking space
+        text.replace("\u00ad", "")  # soft hyphen
+        .replace("\u00a0", " ")  # non-breaking space
         .replace("\u2009", " ")  # thin space
     )
 
@@ -716,7 +712,7 @@ def merge_multiline_headers(blocks: List[ArticleBlock]) -> List[ArticleBlock]:
     if not blocks:
         return blocks
 
-    header_kinds = {"intro", "subheading"}
+    header_texttypes = {TextType.INTRO, TextType.SUBHEADING}
     merged: List[ArticleBlock] = []
 
     i = 0
@@ -726,15 +722,15 @@ def merge_multiline_headers(blocks: List[ArticleBlock]) -> List[ArticleBlock]:
         current = blocks[i]
 
         # Only merge sequences of the same header kind
-        if current.kind in header_kinds:
-            base_kind = current.kind
+        if current.texttype in header_texttypes:
+            base_texttype = current.texttype
 
             # Start merged header text with current block's text
             merged_text = current.text.strip()
             first_block = current
 
             j = i + 1
-            while j < n and blocks[j].kind == base_kind:
+            while j < n and blocks[j].texttype is base_texttype:
                 next_block = blocks[j]
                 next_text = next_block.text.strip()
                 if not next_text:
@@ -753,7 +749,7 @@ def merge_multiline_headers(blocks: List[ArticleBlock]) -> List[ArticleBlock]:
 
             # Create a single merged header block
             new_block = ArticleBlock(
-                kind=base_kind,
+                texttype=base_texttype,
                 text=merged_text,
                 page=first_block.page,
                 column=first_block.column,
@@ -791,33 +787,32 @@ def render_article_to_text(article: ArticleInfo, blocks: List[ArticleBlock]) -> 
       Plain article text (no metadata header).
     """
 
-
     # Ensure blocks are in reading order
     blocks = sorted(blocks, key=lambda b: b.order_index)
 
     lines: List[str] = []
 
     intro_done = False
-    intro_present = any(b.kind == "intro" for b in blocks)
+    intro_present = any(b.texttype is TextType.INTRO for b in blocks)
 
     for b in blocks:
         txt = b.text.strip()
         if not txt:
             continue
 
-        if b.kind == "intro":
+        if b.texttype is TextType.INTRO:
             # Intro is printed where it appears
             lines.append(txt)
             continue
 
         # When we see the first non-intro block after intro(s),
         # insert one blank line once.
-        if intro_present and not intro_done and b.kind != "intro":
+        if intro_present and not intro_done and b.texttype is not TextType.INTRO:
             intro_done = True
             if lines and lines[-1] != "":
                 lines.append("")
 
-        if b.kind == "subheading":
+        if b.texttype is TextType.SUBHEADING:
             # Blank line before subheading
             if lines and lines[-1] != "":
                 lines.append("")
@@ -835,8 +830,9 @@ def render_article_to_text(article: ArticleInfo, blocks: List[ArticleBlock]) -> 
     return "\n".join(lines).rstrip() + "\n"
 
 
-
-def extract_article_text_plain(doc: fitz.Document, magazine: Magazine, article: ArticleInfo) -> str:
+def extract_article_text_plain(
+    doc: fitz.Document, magazine: Magazine, article: ArticleInfo
+) -> str:
     """
     High-level API: extract one article as cleaned plain text.
 
@@ -864,10 +860,9 @@ def extract_article_text_plain(doc: fitz.Document, magazine: Magazine, article: 
 
     # 2) Merge multi-line headers (intro/subheading sequences)
     blocks = merge_multiline_headers(blocks)
-    
+
     # 2b) Fix hyphenation only across line/column breaks (between consecutive blocks)
     blocks = fix_hyphenation_across_block_breaks(blocks)
-
 
     # 3) Compute start PDF index using the same mapping as everywhere else
     start_page_pdf = compute_pdf_index_for_article(magazine, article)
@@ -887,14 +882,15 @@ def extract_article_text_plain(doc: fitz.Document, magazine: Magazine, article: 
 
     # 7) Post-process: fix hyphenation and reflow paragraphs
     clean_text = _dehyphenate_and_reflow(raw_text, width=80)
-    
+
     warn_if_unusually_low_hyphenation(
         text=clean_text,
         article_title=article.title,
         issue_number=magazine.issue_number,
     )
-    
+
     return clean_text
+
 
 def warn_if_unusually_low_hyphenation(
     text: str,
@@ -920,10 +916,10 @@ def warn_if_unusually_low_hyphenation(
         return
 
     hyphen_chars = [
-        "-",        # hyphen-minus
-        "\u2011",   # non-breaking hyphen
-        "\u00AD",   # soft hyphen
-        "–",        # en dash (sometimes used as hyphen)
+        "-",  # hyphen-minus
+        "\u2011",  # non-breaking hyphen
+        "\u00ad",  # soft hyphen
+        "–",  # en dash (sometimes used as hyphen)
     ]
 
     total_chars = len(text)
