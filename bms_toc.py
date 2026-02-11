@@ -4,10 +4,13 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Tuple
 
-import fitz  # PyMuPDF
+import fitz
+
+from core.article_text import ArticleText  # PyMuPDF
 
 
 # ---------- helpers & dataclasses ----------
+
 
 def clean_text(t: str) -> str:
     """
@@ -51,6 +54,7 @@ class TocLine:
     page:
         0-based PDF page index where this line was extracted (the TOC page).
     """
+
     text: str
     bbox: Tuple[float, float, float, float]
     spans: List[Dict[str, Any]]
@@ -94,9 +98,9 @@ class ArticleInfo:
     page:
         Printed start page number as shown in the magazine (from TOC).
         Not the PDF index. Mapping to PDF happens via Magazine.pdf_index_offset.
-    title / subtitle:
-        Article title and optional subtitle from TOC.
-        Multi-line titles/subtitles are concatenated during parsing.
+    chapot / title:
+        Article chapot and optional title from TOC.
+        Multi-line chapots/titles are concatenated during parsing.
     author:
         Raw author line as extracted from TOC (single string).
     authors:
@@ -112,10 +116,11 @@ class ArticleInfo:
     end_page_pdf:
         0-based PDF index where the article ends (last page that contained content).
     """
+
     section: str
     page: Optional[int] = None
+    chapot: str = ""
     title: str = ""
-    subtitle: str = ""
     author: str = ""
     authors: List[str] = field(default_factory=list)
 
@@ -123,6 +128,7 @@ class ArticleInfo:
     start_page_pdf: Optional[int] = None
     end_page: Optional[int] = None
     end_page_pdf: Optional[int] = None
+    article_text: ArticleText = None
 
     def pretty(self) -> str:
         """
@@ -134,9 +140,9 @@ class ArticleInfo:
         out = [f"[{self.section}]"]
         if self.page is not None:
             out.append(f"  Page    : {self.page}")
-        out.append(f"  Title   : {self.title}")
-        if self.subtitle:
-            out.append(f"  Subtitle: {self.subtitle}")
+        out.append(f"  Title   : {self.chapot}")
+        if self.title:
+            out.append(f"  Subtitle: {self.title}")
         if self.authors:
             out.append(f"  Authors : {', '.join(self.authors)}")
         elif self.author:
@@ -177,6 +183,7 @@ class Magazine:
     articles:
         All articles parsed from the TOC (both sections). Each is an ArticleInfo.
     """
+
     issue_number: Optional[int]
     release_year: Optional[int]
     release_month: Optional[int]
@@ -184,28 +191,37 @@ class Magazine:
     pdf_index_offset: Optional[int]
     articles: List[ArticleInfo]
 
-MONTHS_NL = {
-    "januari": 1, "februari": 2, "maart": 3,
-    "april": 4, "mei": 5, "juni": 6,
-    "juli": 7, "augustus": 8, "september": 9,
-    "oktober": 10, "november": 11, "december": 12,
-}
 
+MONTHS_NL = {
+    "januari": 1,
+    "februari": 2,
+    "maart": 3,
+    "april": 4,
+    "mei": 5,
+    "juni": 6,
+    "juli": 7,
+    "augustus": 8,
+    "september": 9,
+    "oktober": 10,
+    "november": 11,
+    "december": 12,
+}
 
 
 # ---------- your existing TOC finder (relaxed with left/right) ----------
 
+
 def find_toc(doc: fitz.Document) -> int | None:
     """
     Locate the TOC page within a magazine PDF.
-    
+
     Heuristic:
     - Find a page where 'Projecten' appears in the left half
       and 'Techniek' appears in the right half (same page).
-    
+
     Input:
       doc: open PyMuPDF document.
-    
+
     Output:
       0-based PDF page index of the TOC page, or None if not found.
     """
@@ -255,6 +271,7 @@ def find_toc(doc: fitz.Document) -> int | None:
 
 # ---------- collect lines on TOC page ----------
 
+
 def collect_toc_lines(doc: fitz.Document, pno: int) -> List[TocLine]:
     """
     Extract all readable text lines from the TOC page as TocLine objects.
@@ -301,6 +318,7 @@ def collect_toc_lines(doc: fitz.Document, pno: int) -> List[TocLine]:
 
 # ---------- find header Y for Projecten / Techniek ----------
 
+
 def find_header_y(lines: List[TocLine], keyword: str) -> float:
     """
     Find the vertical position (y) of a section header on the TOC page.
@@ -320,6 +338,7 @@ def find_header_y(lines: List[TocLine], keyword: str) -> float:
 
 
 # ---------- role classification via font ----------
+
 
 def classify_role(line: TocLine) -> str:
     """
@@ -362,9 +381,8 @@ def classify_role(line: TocLine) -> str:
     return "other"
 
 
-
-
 # ----------- Toegevoegde regels --------
+
 
 def split_page_prefix(text: str) -> tuple[Optional[int], str]:
     """
@@ -386,7 +404,6 @@ def split_page_prefix(text: str) -> tuple[Optional[int], str]:
         title_rest = m.group(2).lstrip(" .:-–—\t\u00a0").strip()
         return page, title_rest
     return None, text.strip()
-
 
 
 def extract_magazine_from_toc(doc, toc_page_index, articles):
@@ -442,11 +459,13 @@ def extract_magazine_from_toc(doc, toc_page_index, articles):
             if y_center < ph * 0.75:
                 continue
 
-            footer_lines.append({
-                "text": text,
-                "y_center": y_center,
-                "x_center": x_center,
-            })
+            footer_lines.append(
+                {
+                    "text": text,
+                    "y_center": y_center,
+                    "x_center": x_center,
+                }
+            )
 
     # Sort bottom-up
     footer_lines.sort(key=lambda d: d["y_center"], reverse=True)
@@ -503,8 +522,10 @@ def extract_magazine_from_toc(doc, toc_page_index, articles):
     if target_y is not None:
         tol = 3.0  # y-alignment tolerance
         candidates = [
-            line for line in footer_lines
-            if (line["x_center"] > pw * 0.5) and (abs(line["y_center"] - target_y) <= tol)
+            line
+            for line in footer_lines
+            if (line["x_center"] > pw * 0.5)
+            and (abs(line["y_center"] - target_y) <= tol)
         ]
 
         for c in candidates:
@@ -531,10 +552,6 @@ def extract_magazine_from_toc(doc, toc_page_index, articles):
     )
 
     return mag
-
-
-
-
 
 
 # ---------- parse a single column into articles ----------
@@ -575,7 +592,7 @@ def parse_column(lines: List[TocLine], section: str) -> List[ArticleInfo]:
     current_header_y: Optional[float] = None
 
     for ln in lines:
-        role = classify_role(ln)   # unchanged
+        role = classify_role(ln)  # unchanged
         raw_txt = ln.text.strip()
 
         if role == "title":
@@ -587,7 +604,7 @@ def parse_column(lines: List[TocLine], section: str) -> List[ArticleInfo]:
             else:
                 # Als huidige artikel al een titel heeft én (subtitel of auteur),
                 # dan is dit waarschijnlijk een nieuw artikel.
-                if cur.title and (cur.subtitle or cur.author):
+                if cur.chapot and (cur.title or cur.author):
                     articles.append(cur)
                     cur = ArticleInfo(section=section)
 
@@ -596,10 +613,10 @@ def parse_column(lines: List[TocLine], section: str) -> List[ArticleInfo]:
                 cur.page = page_num
 
             # voeg titel toe (multi-line titels worden samengevoegd)
-            if cur.title:
-                cur.title = (cur.title + " " + title_txt).strip()
+            if cur.chapot:
+                cur.chapot = (cur.chapot + " " + title_txt).strip()
             else:
-                cur.title = title_txt
+                cur.chapot = title_txt
 
             # update header anchor for this article
             current_header_y = ln.y_top
@@ -607,10 +624,10 @@ def parse_column(lines: List[TocLine], section: str) -> List[ArticleInfo]:
         elif role == "subtitle":
             if cur is None:
                 cur = ArticleInfo(section=section)
-            if cur.subtitle:
-                cur.subtitle = (cur.subtitle + " " + raw_txt).strip()
+            if cur.title:
+                cur.title = (cur.title + " " + raw_txt).strip()
             else:
-                cur.subtitle = raw_txt
+                cur.title = raw_txt
 
             # subtitle also acts as the nearest header anchor
             current_header_y = ln.y_top
@@ -644,7 +661,6 @@ def parse_column(lines: List[TocLine], section: str) -> List[ArticleInfo]:
     return articles
 
 
-
 def split_authors_text(author_text: str) -> List[str]:
     """
     Splits an author string like:
@@ -674,11 +690,6 @@ def split_authors_text(author_text: str) -> List[str]:
     return authors
 
 
-
-
-
-
-
 def build_magazine_from_pdf(doc):
     """
     High-level entry point: build a Magazine object from a PDF.
@@ -698,8 +709,8 @@ def build_magazine_from_pdf(doc):
       Magazine with articles filled; pdf_index_offset may be None if footer parsing fails.
     """
     toc_page = find_toc(doc)
-    
-    editionnumber = doc.name.split('\\')[-1].split('_')[0]
+
+    editionnumber = doc.name.split("\\")[-1].split("_")[0]
     if toc_page is None:
         raise ValueError(f"BMS-{editionnumber}, Geen TOC-pagina gevonden.")
 
@@ -708,13 +719,17 @@ def build_magazine_from_pdf(doc):
     pw, ph = page.rect.width, page.rect.height
 
     projecten_y = find_header_y(lines, "projecten")
-    techniek_y  = find_header_y(lines, "techniek")
+    techniek_y = find_header_y(lines, "techniek")
 
-    proj_lines = [ln for ln in lines if ln.x_center <= pw * 0.5 and ln.y_top > projecten_y]
-    tech_lines = [ln for ln in lines if ln.x_center >  pw * 0.5 and ln.y_top > techniek_y]
+    proj_lines = [
+        ln for ln in lines if ln.x_center <= pw * 0.5 and ln.y_top > projecten_y
+    ]
+    tech_lines = [
+        ln for ln in lines if ln.x_center > pw * 0.5 and ln.y_top > techniek_y
+    ]
 
     projecten_articles = parse_column(proj_lines, "Projecten")
-    techniek_articles  = parse_column(tech_lines, "Techniek")
+    techniek_articles = parse_column(tech_lines, "Techniek")
 
     # parse authors
     all_articles = projecten_articles + techniek_articles
@@ -725,5 +740,3 @@ def build_magazine_from_pdf(doc):
     # build Magazine object
     magazine = extract_magazine_from_toc(doc, toc_page, all_articles)
     return magazine
-
-

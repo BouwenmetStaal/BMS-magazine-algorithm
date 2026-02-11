@@ -23,6 +23,7 @@ XML export can be added later.
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 from enums import TextType
+from core.article_text import ArticleText, ParagraphText
 
 import re
 import textwrap
@@ -122,7 +123,7 @@ def compute_pdf_index_for_article(magazine: Magazine, article: ArticleInfo) -> i
     if article.page is None:
         # raise ValueError(f"BMS-{magazine.issue_number}, Article '{article.title}' has no page number from TOC.")
         print(
-            f"[ERROR] BMS-{magazine.issue_number}, Article '{article.title}' has no page number from TOC."
+            f"[ERROR] BMS-{magazine.issue_number}, Article '{article.chapot}' has no page number from TOC."
         )
         return -1
     if magazine.pdf_index_offset is None:
@@ -496,7 +497,7 @@ def extract_article_blocks(
             is_end, cleaned_text = check_end_marker(ln)
 
             # map 'body' to 'paragraph' for block textype
-            block_texttype = TextType.PARAGRAPH #DEFAULT
+            block_texttype = TextType.PARAGRAPH  # DEFAULT
             if texttype is TextType.INTRO:
                 block_texttype = TextType.INTRO
             elif texttype is TextType.SUBHEADING:
@@ -531,7 +532,7 @@ def extract_article_blocks(
         # We keep the collected blocks (article content) but notify via stdout.
         print(
             f"[WARN] No end-of-article marker ('•') found for article "
-            f"'{article.title}' (start page {article.page}, "
+            f"'{article.chapot}' (start page {article.page}, "
             f"issue {magazine.issue_number}). "
             f"Last page with content: PDF index {last_page_with_content} "
             f"(PDF page {last_page_with_content + 1})."
@@ -591,7 +592,11 @@ def fix_hyphenation_across_block_breaks(
         current = blocks[i]
 
         # Default: keep current block
-        if current.texttype in mergeable_texttypes and i + 1 < n and blocks[i + 1].texttype is current.texttype:
+        if (
+            current.texttype in mergeable_texttypes
+            and i + 1 < n
+            and blocks[i + 1].texttype is current.texttype
+        ):
             nxt = blocks[i + 1]
 
             cur_text = (current.text or "").rstrip()
@@ -795,6 +800,18 @@ def render_article_to_text(article: ArticleInfo, blocks: List[ArticleBlock]) -> 
     intro_done = False
     intro_present = any(b.texttype is TextType.INTRO for b in blocks)
 
+    article_text: ArticleText = None
+
+    intro_text: str = None
+    first_paragraph: str = None
+
+    paragraph_header: str = ""
+    raw_paragraph_text: str = ""
+
+    paragraph_text_list: List[ParagraphText] = []
+
+    new_paragraph: bool = True
+
     for b in blocks:
         txt = b.text.strip()
         if not txt:
@@ -803,6 +820,7 @@ def render_article_to_text(article: ArticleInfo, blocks: List[ArticleBlock]) -> 
         if b.texttype is TextType.INTRO:
             # Intro is printed where it appears
             lines.append(txt)
+            intro_text = txt
             continue
 
         # When we see the first non-intro block after intro(s),
@@ -823,9 +841,46 @@ def render_article_to_text(article: ArticleInfo, blocks: List[ArticleBlock]) -> 
             # Normal paragraph/body line
             lines.append(txt)
 
+        # AJOR: extra for article text class filling
+        if b.texttype is TextType.INTRO:
+            intro_text = txt
+
+        if b.texttype is TextType.PARAGRAPH:
+            raw_paragraph_text += txt + "\n"
+            if b == blocks[-1]:
+                paragraph_text_instance = ParagraphText(
+                    text=raw_paragraph_text, header=paragraph_header
+                )
+                paragraph_text_list.append(paragraph_text_instance)
+
+        if b.texttype is TextType.SUBHEADING:
+            if new_paragraph is True:
+                if first_paragraph is None:
+                    first_paragraph = raw_paragraph_text
+                    raw_paragraph_text = ""
+                    paragraph_header = txt
+                else:
+                    paragraph_text_instance = ParagraphText(
+                        text=raw_paragraph_text, header=paragraph_header
+                    )
+                    paragraph_text_list.append(paragraph_text_instance)
+                    paragraph_header = txt
+                    raw_paragraph_text = ""
+                    paragraph_text_instance = ""
+
+    # TODO laatste artikel opslaan
+    # TODO hoe om te gaan met artikelen waarin deze structuur niet aanwezig is.
+
     # Remove trailing blank lines
     while lines and lines[-1] == "":
         lines.pop()
+
+    article_text = ArticleText(
+        intro_text=intro_text,
+        first_paragraph=first_paragraph,
+        paragraph_texts=paragraph_text_list,
+    )
+    article.article_text = article_text
 
     return "\n".join(lines).rstrip() + "\n"
 
@@ -885,7 +940,7 @@ def extract_article_text_plain(
 
     warn_if_unusually_low_hyphenation(
         text=clean_text,
-        article_title=article.title,
+        article_title=article.chapot,
         issue_number=magazine.issue_number,
     )
 

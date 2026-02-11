@@ -121,10 +121,10 @@ def build_article_metadata(magazine: Magazine, article: ArticleInfo) -> str:
     # Build metadata lines (same structure as before)
     metadata_lines = []
     metadata_lines.append("========== ARTICLE METADATA ==========")
-    metadata_lines.append(f"Title          : {article.title}")
+    metadata_lines.append(f"Title          : {article.chapot}")
 
-    if article.subtitle:
-        metadata_lines.append(f"Subtitle       : {article.subtitle}")
+    if article.title:
+        metadata_lines.append(f"Subtitle       : {article.title}")
 
     metadata_lines.append(f"Section        : {article.section}")
 
@@ -328,6 +328,7 @@ def process_magazine_pdf(pdf_path: Path, base_output_dir: Path) -> pd.DataFrame:
             low_hyphenation_hits.append(
                 {
                     "idx": idx,
+                    "chapot": article.chapot,
                     "title": article.title,
                     "hy_count": hy_count,
                     "total_chars": total_chars,
@@ -356,8 +357,8 @@ def process_magazine_pdf(pdf_path: Path, base_output_dir: Path) -> pd.DataFrame:
 
         json_data = {
             "metadata": {
+                "chapot": article.chapot,
                 "title": article.title,
-                "subtitle": article.subtitle,
                 "section": article.section,
                 "authors": getattr(article, "authors", None)
                 or (
@@ -373,7 +374,17 @@ def process_magazine_pdf(pdf_path: Path, base_output_dir: Path) -> pd.DataFrame:
                 "pdf_page_start_index": article.start_page_pdf,
                 "pdf_page_end_index": article.end_page_pdf,
             },
-            "text": article_text,
+            "text": {
+                "intro": article.article_text.intro_text,
+                "first_paragraph": article.article_text.first_paragraph,
+                "paragraphs": [
+                    {
+                        "header": pt.header,
+                        "text": pt.text,
+                    }
+                    for pt in article.article_text.paragraph_texts
+                ],
+            },
         }
 
         # Add article to magazine JSON
@@ -384,15 +395,15 @@ def process_magazine_pdf(pdf_path: Path, base_output_dir: Path) -> pd.DataFrame:
         status_dataframe.append(
             {
                 "edition": f"Bouwen met Staal {magazine.issue_number}",
+                "chapot": (
+                    article.chapot.replace("\x07", "")
+                    if article.chapot
+                    else article.chapot
+                ),
                 "title": (
                     article.title.replace("\x07", "")
                     if article.title
                     else article.title
-                ),
-                "subtitle": (
-                    article.subtitle.replace("\x07", "")
-                    if article.subtitle
-                    else article.subtitle
                 ),
                 "section": (
                     article.section.replace("\x07", "")
