@@ -211,7 +211,7 @@ MONTHS_NL = {
 # ---------- your existing TOC finder (relaxed with left/right) ----------
 
 
-def find_toc(doc: fitz.Document) -> int | None:
+def find_toc(doc: fitz.Document, left_half_header: str, right_half_header: str) -> int | None:
     """
     Locate the TOC page within a magazine PDF.
 
@@ -248,8 +248,8 @@ def find_toc(doc: fitz.Document) -> int | None:
                     continue
 
                 lower = text.lower()
-                contains_proj = "projecten" in lower
-                contains_tech = "techniek" in lower
+                contains_proj = left_half_header.lower() in lower
+                contains_tech = right_half_header.lower() in lower
 
                 if not (contains_proj or contains_tech):
                     continue
@@ -264,6 +264,9 @@ def find_toc(doc: fitz.Document) -> int | None:
                     has_tech_right = True
 
         if has_proj_left and has_tech_right:
+            return pno
+        
+        if has_proj_left and right_half_header == left_half_header: #Edge case for specials e.g. Rotterdam centraal, Utrech centraal, Cargo
             return pno
 
     return None
@@ -595,6 +598,10 @@ def parse_column(lines: List[TocLine], section: str) -> List[ArticleInfo]:
         role = classify_role(ln)  # unchanged
         raw_txt = ln.text.strip()
 
+        if raw_txt == "NIEUWS":
+            # Edge case: skip "NIEUWS" line that appears in some TOC, NIEUW does not follow the format of the articles
+            continue
+
         if role == "title":
             page_num, title_txt = split_page_prefix(raw_txt)
 
@@ -708,9 +715,71 @@ def build_magazine_from_pdf(doc):
     Output:
       Magazine with articles filled; pdf_index_offset may be None if footer parsing fails.
     """
-    toc_page = find_toc(doc)
+    editionnumber = int(doc.name.split("\\")[-1].split("_")[0])
+    left_half_str = "projecten"
+    right_half_str = "techniek"
+    previous_page_str = "rubrieken"
+    if editionnumber == 307:
+        left_half_str = "tornado"
+        right_half_str = "projecten"
+    elif editionnumber ==288:
+        left_half_str = "rubrieken"
+        right_half_str = "techniek"
+        previous_page_str = "projecten"
+    elif editionnumber == 284:
+        left_half_str = "biopartner"
+        right_half_str = "techniek"
+    elif editionnumber == 278:
+        left_half_str = "projecten"
+        right_half_str = "veiligheid"
+    elif editionnumber == 267:
+        left_half_str = "projecten"
+        right_half_str = "markt"
+    elif editionnumber == 261:
+        left_half_str = "rubrieken"
+        right_half_str = "techniek"
+        previous_page_str = "projecten"
+    elif editionnumber == 258:
+        left_half_str = "zandhazenbrug"
+        right_half_str = "projecten"
+    elif editionnumber == 255: #TODO: onderstaande tags zijn al artikelen maar worden niet herkent aangezien hij wsl iets lager begint met zoeken
+        left_half_str = "aansprakelijkheid van de mijnbouw"
+        right_half_str = "versterken en bouwkundig detailleren"
+    elif editionnumber == 254: #TODO: deze werkt niet omdat de paginas van de TOC zijn ingescand
+        left_half_str = "utrecht centraal"
+        right_half_str = "utrecht centraal"
+    elif editionnumber == 251:
+        left_half_str = "rubrieken"
+        right_half_str = "projecten"
+        previous_page_str = "central security"
+    elif editionnumber == 247:
+        left_half_str = "marktsignalen"
+        right_half_str = "marktsignalen"
+        previous_page_str = "techniek"
+    elif editionnumber == 238:
+        left_half_str = "Special: kargo"
+        right_half_str = "Special: kargo"
+    elif editionnumber == 240:
+        left_half_str = "Rotterdam centraal"
+        right_half_str = "Rotterdam centraal"
+    elif editionnumber == 226:
+        left_half_str = "overkapping ijsei, amsterdam"
+        right_half_str = "overkapping ijsei, amsterdam"
+    elif editionnumber == 220:
+        left_half_str = "Vak"
+        right_half_str = "Visie"
+        previous_page_str = "vereniging"
 
-    editionnumber = doc.name.split("\\")[-1].split("_")[0]
+        
+
+    toc_page = find_toc(doc, left_half_str, right_half_str)
+
+    if editionnumber == 266:#TODO: dit werkt niet ook issue maand en jaar moet gevonden worden 
+        toc_page = 4
+    elif editionnumber == 261:
+        toc_page = 4
+
+    
     if toc_page is None:
         raise ValueError(f"BMS-{editionnumber}, Geen TOC-pagina gevonden.")
 
@@ -718,21 +787,34 @@ def build_magazine_from_pdf(doc):
     page = doc[toc_page]
     pw, ph = page.rect.width, page.rect.height
 
-    projecten_y = find_header_y(lines, "projecten")
-    techniek_y = find_header_y(lines, "techniek")
+    
+
+    left_header_y = find_header_y(lines, left_half_str)
+    right_header_y = find_header_y(lines, right_half_str)
+    if left_half_str == right_half_str:
+        right_header_y = left_header_y 
 
     proj_lines = [
-        ln for ln in lines if ln.x_center <= pw * 0.5 and ln.y_top > projecten_y
+        ln for ln in lines if ln.x_center <= pw * 0.5 and ln.y_top > left_header_y
     ]
     tech_lines = [
-        ln for ln in lines if ln.x_center > pw * 0.5 and ln.y_top > techniek_y
+        ln for ln in lines if ln.x_center > pw * 0.5 and ln.y_top > right_header_y
     ]
 
-    projecten_articles = parse_column(proj_lines, "Projecten")
-    techniek_articles = parse_column(tech_lines, "Techniek")
+    projecten_articles = parse_column(proj_lines, left_half_str)
+    techniek_articles = parse_column(tech_lines, right_half_str)
+
+    lines = collect_toc_lines(doc, toc_page-1)
+    page = doc[toc_page-1]
+    pw, ph = page.rect.width, page.rect.height
+    rubrieken_header_y = find_header_y(lines, previous_page_str)
+    rubriek_lines = [
+        ln for ln in lines if ln.x_center > pw * 0.5 and ln.y_top > rubrieken_header_y
+    ]
+    rubriek_articles = parse_column(rubriek_lines, previous_page_str)
 
     # parse authors
-    all_articles = projecten_articles + techniek_articles
+    all_articles = rubriek_articles+ projecten_articles + techniek_articles
     for art in all_articles:
         if art.author:
             art.authors = split_authors_text(art.author)

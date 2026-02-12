@@ -476,12 +476,10 @@ def main() -> None:
 
     # ------------------ Locatie aanpassen --------------------------
 
-    magazine_dir = Path(
-        r"C:\Users\AJOR\Bouwen met Staal\ChatBmS - General\Archief_BMS_magazines [Erik]\Magazine_compleet_archief\2025 (303-308)"
-    )  # locatie Aanpassen naar eigen voorkeur
+    
     # Get all subdirectories in the archive folder
     archive_root = Path(
-        r"C:\Users\AJOR\Bouwen met Staal\ChatBmS - General\Archief_BMS_magazines [Erik]\Magazine_compleet_archief"
+        r"C:\Users\AJOR\Bouwen met Staal\ChatBmS - General\Magazine_compleet_archief"
     )
     year_folders = sorted(
         [d for d in archive_root.iterdir() if d.is_dir()], reverse=True
@@ -491,10 +489,17 @@ def main() -> None:
     status_data_all = pd.DataFrame()
 
     # For testing, process only the latest year folder
-    year_folders = year_folders[:3]
+    year_folders = year_folders
+
+    year_folders = [
+        Path(
+            r"C:\Users\AJOR\Bouwen met Staal\ChatBmS - General\Magazine_compleet_archief\2025 (303-308)"
+        )
+    ]
 
     # Process each year folder
     for magazine_dir in year_folders:
+
         print(f"\n[INFO] Processing folder: {magazine_dir.name}")
         magazine_dir = archive_root / magazine_dir.name
         base_output_dir = Path(r"C:\Users\AJOR\Documents\BMS_algortime_testfolder")
@@ -517,10 +522,33 @@ def main() -> None:
         print(f"[INFO] Found {len(pdf_files)} PDF file(s) to process.\n")
 
         for pdf_path in pdf_files:
-            status_data_magazine = process_magazine_pdf(pdf_path, base_output_dir)
-            status_data_all = pd.concat(
-                [status_data_all, status_data_magazine], ignore_index=True
-            )
+            edition = int(pdf_path.stem.split("_")[0])
+            if edition in [249, 248, 231]: #TOC heeft andere format, geen woorden zoals techniek en projecten
+                continue  
+            elif edition in [266, 261, 245, 206, 204, 203, 199, 197, 196, 194]:
+                continue  # toc heeft geen pagina nummer en regel met editie metadata ontbreekt, op basis van vorig pagina zoeken?
+            pdf_status = str(pdf_path.stem).split("_")[-1]
+            if pdf_status == "Staalprijs":
+                staalprijs_data = pd.DataFrame(
+                    [
+                        {
+                            "edition": f"Bouwen met Staal {edition}",
+                            "chapot": "STAALPRIJS EDITIE",
+                            "title": "STAALPRIJS EDITIE",
+                            "section": "",
+                            "authors": [],
+                            "hyphens_per_1000": 0.0,
+                        }
+                    ]
+                )
+                status_data_all = pd.concat(
+                    [status_data_all, staalprijs_data], ignore_index=True
+                )
+            else:
+                status_data_magazine = process_magazine_pdf(pdf_path, base_output_dir)
+                status_data_all = pd.concat(
+                    [status_data_all, status_data_magazine], ignore_index=True
+                )
 
         print("\n[INFO] Batch processing finished.")
 
@@ -532,7 +560,11 @@ def main() -> None:
         status_df[col] = status_df[col].apply(sanitize_for_excel)
 
     excel_output_path = base_output_dir / "extraction_status.xlsx"
-    status_df.to_excel(excel_output_path, index=False)
+    with pd.ExcelWriter(excel_output_path, engine='openpyxl') as writer:
+        status_df.to_excel(writer, index=False)
+        worksheet = writer.sheets['Sheet1']
+        for column in worksheet.columns:
+            worksheet.column_dimensions[column[0].column_letter].width = 32
     print(f"\n[INFO] Status data saved to: {excel_output_path}")
 
 
