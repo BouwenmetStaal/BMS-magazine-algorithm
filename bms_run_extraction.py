@@ -491,11 +491,11 @@ def main() -> None:
     # For testing, process only the latest year folder
     year_folders = year_folders
 
-    year_folders = [
-        Path(
-            r"C:\Users\AJOR\Bouwen met Staal\ChatBmS - General\Magazine_compleet_archief\2025 (303-308)"
-        )
-    ]
+    # year_folders = [
+    #     Path(
+    #         r"C:\Users\AJOR\Bouwen met Staal\ChatBmS - General\Magazine_compleet_archief\2007 (195-200)"
+    #     )
+    # ]
 
     # Process each year folder
     for magazine_dir in year_folders:
@@ -525,8 +525,8 @@ def main() -> None:
             edition = int(pdf_path.stem.split("_")[0])
             if edition in [249, 248, 231]: #TOC heeft andere format, geen woorden zoals techniek en projecten
                 continue  
-            elif edition in [266, 261, 245, 206, 204, 203, 199, 197, 196, 194]:
-                continue  # toc heeft geen pagina nummer en regel met editie metadata ontbreekt, op basis van vorig pagina zoeken?
+            #elif edition in [266, 261, 245, 206, 204, 203, 199, 197, 196, 194]:
+             #   continue  # toc heeft geen pagina nummer en regel met editie metadata ontbreekt, op basis van vorig pagina zoeken?
             pdf_status = str(pdf_path.stem).split("_")[-1]
             if pdf_status == "Staalprijs":
                 staalprijs_data = pd.DataFrame(

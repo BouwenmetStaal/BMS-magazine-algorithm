@@ -520,6 +520,16 @@ def extract_magazine_from_toc(doc, toc_page_index, articles):
 
                 target_y = y_center
                 break
+            #for edition 206,204,203,199,197,196,194 is the pattern 'BOUWEN MET STAAL 266' instead of ''BOUWEN MET STAAL 266 | DECEMBER 2018'
+            m = re.search(r"bouwen met staal\s+(\d{1,3})", txt, flags=re.I)
+            if m:
+                try:
+                    issue_number = int(m.group(1))
+                except:
+                    issue_number = None
+                target_y = y_center
+                break
+
 
     # --- step 2: find printed page number on same row, right side ---
     if target_y is not None:
@@ -543,6 +553,114 @@ def extract_magazine_from_toc(doc, toc_page_index, articles):
     # --- step 3: compute PDF index offset ---
     if toc_printed_page is not None:
         pdf_index_offset = toc_page_index - toc_printed_page
+
+
+    #if nothing is found try the previous page
+    if issue_number is None and release_year is None and release_month is None:
+        page = doc[toc_page_index-1]#select the previous page
+        pw, ph = page.rect.width, page.rect.height
+        data = page.get_text("dict")
+
+        # --- collect footer lines (bottom 25% of page) ---
+        footer_lines = []
+        for block in data.get("blocks", []):
+            if block.get("type", 0) != 0:
+                continue
+
+            for line in block.get("lines", []):
+                spans = line.get("spans", [])
+                if not spans:
+                    continue
+
+                text = clean_text("".join(s.get("text", "") for s in spans))
+                if not text:
+                    continue
+
+                xs = [s["bbox"][0] for s in spans]
+                ys = [s["bbox"][1] for s in spans]
+                xe = [s["bbox"][2] for s in spans]
+                ye = [s["bbox"][3] for s in spans]
+
+                x0, y0, x1, y1 = min(xs), min(ys), max(xe), max(ye)
+                y_center = 0.5 * (y0 + y1)
+                x_center = 0.5 * (x0 + x1)
+
+                # Only bottom quarter of page = footer area
+                if y_center < ph * 0.75:
+                    continue
+
+                footer_lines.append(
+                    {
+                        "text": text,
+                        "y_center": y_center,
+                        "x_center": x_center,
+                    }
+                )
+
+        # Sort bottom-up
+        footer_lines.sort(key=lambda d: d["y_center"], reverse=True)
+
+
+        # --- step 1: find the right footer line with "BOUWEN MET STAAL" ---
+        for line in footer_lines:
+            txt = line["text"]
+            x_center = line["x_center"]
+            y_center = line["y_center"]
+            lower = txt.lower()
+
+            # must be on the right half of page
+            if x_center < pw * 0.5:
+                continue
+
+            if "bouwen met staal" in lower:
+                # match pattern: ' DECEMBER 2018 | BOUWEN MET STAAL 266' and not 'BOUWEN MET STAAL 266 | DECEMBER 2018'
+                m = re.search(r"(.+?)\s*\|\s*bouwen met staal\s+(\d{1,3})", txt, flags=re.I)
+                if m:
+                    # parse issue number
+                    try:
+                        issue_number = int(m.group(2))
+                    except:
+                        issue_number = None
+
+                    # store original label (MAAND JAAR)
+                    original_label = m.group(1).strip()
+
+                    # parse MAAND + JAAR
+                    parts = original_label.split()
+                    if len(parts) >= 2:
+                        month_name = parts[0].lower()
+                        if month_name in MONTHS_NL:
+                            release_month = MONTHS_NL[month_name]
+                        try:
+                            release_year = int(parts[1])
+                        except:
+                            release_year = None
+
+                    target_y = y_center
+                    break
+
+        # --- step 2: find printed page number on same row, left side ---
+        if target_y is not None:
+            tol = 3.0  # y-alignment tolerance
+            candidates = [
+                line
+                for line in footer_lines
+                if (line["x_center"] < pw * 0.5)
+                and (abs(line["y_center"] - target_y) <= tol)
+            ]
+
+            for c in candidates:
+                nums = re.findall(r"\b(\d{1,3})\b", c["text"])
+                if nums:
+                    try:
+                        toc_printed_page = int(nums[-1])+1
+                        break
+                    except:
+                        continue
+
+        # --- step 3: compute PDF index offset ---
+        if toc_printed_page is not None:
+            pdf_index_offset = toc_page_index - toc_printed_page
 
     # --- build Magazine object ---
     mag = Magazine(
