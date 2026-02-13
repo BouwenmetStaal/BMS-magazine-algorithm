@@ -7,3 +7,10 @@ class TextType(Enum):
     SUBHEADING = "subheading"
     PARAGRAPH = "paragraph"
     BODY = "body"
+
+class TOClineType(Enum):
+    """Enum for different types of TOC lines."""
+    CHAPOT = "chapot"
+    TITLE = "title"
+    AUTHOR = "author"
+    OTHER = "other"

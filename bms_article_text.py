@@ -30,7 +30,7 @@ import textwrap
 import fitz  # PyMuPDF
 
 
-from bms_toc import Magazine, ArticleInfo, build_magazine_from_pdf
+from bms_toc import Magazine, Article, build_magazine_from_pdf
 
 
 # --- basic helpers / constants ------------------------------------------------
@@ -102,7 +102,7 @@ class ArticleBlock:
 # --- mapping: TOC -> PDF page -------------------------------------------------
 
 
-def compute_pdf_index_for_article(magazine: Magazine, article: ArticleInfo) -> int:
+def compute_pdf_index_for_article(magazine: Magazine, article: Article) -> int:
     """
     Map an article's printed start page (TOC) to a 0-based PDF page index.
 
@@ -141,7 +141,7 @@ def compute_pdf_index_for_article(magazine: Magazine, article: ArticleInfo) -> i
 
 
 def get_article_start_page(
-    doc: fitz.Document, magazine: Magazine, article: ArticleInfo
+    doc: fitz.Document, magazine: Magazine, article: Article
 ) -> fitz.Page:
     """
     Convenience wrapper returning the fitz.Page where an article starts.
@@ -439,7 +439,7 @@ def check_end_marker(line: ArticlePageLine) -> Tuple[bool, str]:
 
 
 def extract_article_blocks(
-    doc: fitz.Document, magazine: Magazine, article: ArticleInfo
+    doc: fitz.Document, magazine: Magazine, article: Article
 ) -> Tuple[List[ArticleBlock], int]:
     """
     Extract an article as an ordered stream of ArticleBlock objects.
@@ -775,7 +775,7 @@ def merge_multiline_headers(blocks: List[ArticleBlock]) -> List[ArticleBlock]:
 # --- rendering to plain text -------------------------------------------------
 
 
-def render_article_to_text(article: ArticleInfo, blocks: List[ArticleBlock]) -> str:
+def render_article_to_text(article: Article, blocks: List[ArticleBlock]) -> str:
     """
     Convert ArticleBlock stream into plain text (content only).
 
@@ -886,7 +886,7 @@ def render_article_to_text(article: ArticleInfo, blocks: List[ArticleBlock]) -> 
 
 
 def extract_article_text_plain(
-    doc: fitz.Document, magazine: Magazine, article: ArticleInfo
+    doc: fitz.Document, magazine: Magazine, article: Article
 ) -> str:
     """
     High-level API: extract one article as cleaned plain text.

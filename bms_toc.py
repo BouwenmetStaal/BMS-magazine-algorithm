@@ -3,6 +3,7 @@
 import re
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Tuple
+from enums import TOClineType
 
 import fitz
 
@@ -84,7 +85,7 @@ class TocLine:
 
 
 @dataclass
-class ArticleInfo:
+class Article:
     """
     Parsed metadata for a single article, primarily from the TOC.
 
@@ -189,7 +190,7 @@ class Magazine:
     release_month: Optional[int]
     original_label: Optional[str]
     pdf_index_offset: Optional[int]
-    articles: List[ArticleInfo]
+    articles: List[Article]
 
 
 MONTHS_NL = {
@@ -211,7 +212,9 @@ MONTHS_NL = {
 # ---------- your existing TOC finder (relaxed with left/right) ----------
 
 
-def find_toc(doc: fitz.Document, left_half_header: str, right_half_header: str) -> int | None:
+def find_toc(
+    doc: fitz.Document, left_half_header: str, right_half_header: str
+) -> int | None:
     """
     Locate the TOC page within a magazine PDF.
 
@@ -265,8 +268,10 @@ def find_toc(doc: fitz.Document, left_half_header: str, right_half_header: str) 
 
         if has_proj_left and has_tech_right:
             return pno
-        
-        if has_proj_left and right_half_header == left_half_header: #Edge case for specials e.g. Rotterdam centraal, Utrech centraal, Cargo
+
+        if (
+            has_proj_left and right_half_header == left_half_header
+        ):  # Edge case for specials e.g. Rotterdam centraal, Utrech centraal, Cargo
             return pno
 
     return None
@@ -343,7 +348,7 @@ def find_header_y(lines: List[TocLine], keyword: str) -> float:
 # ---------- role classification via font ----------
 
 
-def classify_role(line: TocLine) -> str:
+def determin_tocline_type(line: TocLine) -> TOClineType:
     """
     Classify a TOC line as 'title', 'subtitle', 'author', or 'other' using fonts.
 
@@ -376,12 +381,12 @@ def classify_role(line: TocLine) -> str:
 
     # priority: author > subtitle > title
     if is_author:
-        return "author"
+        return TOClineType.AUTHOR
     if is_subtitle:
-        return "subtitle"
+        return TOClineType.TITLE
     if is_title:
-        return "title"
-    return "other"
+        return TOClineType.CHAPOT
+    return TOClineType.OTHER
 
 
 # ----------- Toegevoegde regels --------
@@ -520,7 +525,7 @@ def extract_magazine_from_toc(doc, toc_page_index, articles):
 
                 target_y = y_center
                 break
-            #for edition 206,204,203,199,197,196,194 is the pattern 'BOUWEN MET STAAL 266' instead of ''BOUWEN MET STAAL 266 | DECEMBER 2018'
+            # for edition 206,204,203,199,197,196,194 is the pattern 'BOUWEN MET STAAL 266' instead of ''BOUWEN MET STAAL 266 | DECEMBER 2018'
             m = re.search(r"bouwen met staal\s+(\d{1,3})", txt, flags=re.I)
             if m:
                 try:
@@ -529,7 +534,6 @@ def extract_magazine_from_toc(doc, toc_page_index, articles):
                     issue_number = None
                 target_y = y_center
                 break
-
 
     # --- step 2: find printed page number on same row, right side ---
     if target_y is not None:
@@ -554,10 +558,9 @@ def extract_magazine_from_toc(doc, toc_page_index, articles):
     if toc_printed_page is not None:
         pdf_index_offset = toc_page_index - toc_printed_page
 
-
-    #if nothing is found try the previous page
+    # if nothing is found try the previous page
     if issue_number is None and release_year is None and release_month is None:
-        page = doc[toc_page_index-1]#select the previous page
+        page = doc[toc_page_index - 1]  # select the previous page
         pw, ph = page.rect.width, page.rect.height
         data = page.get_text("dict")
 
@@ -600,7 +603,6 @@ def extract_magazine_from_toc(doc, toc_page_index, articles):
         # Sort bottom-up
         footer_lines.sort(key=lambda d: d["y_center"], reverse=True)
 
-
         # --- step 1: find the right footer line with "BOUWEN MET STAAL" ---
         for line in footer_lines:
             txt = line["text"]
@@ -614,7 +616,9 @@ def extract_magazine_from_toc(doc, toc_page_index, articles):
 
             if "bouwen met staal" in lower:
                 # match pattern: ' DECEMBER 2018 | BOUWEN MET STAAL 266' and not 'BOUWEN MET STAAL 266 | DECEMBER 2018'
-                m = re.search(r"(.+?)\s*\|\s*bouwen met staal\s+(\d{1,3})", txt, flags=re.I)
+                m = re.search(
+                    r"(.+?)\s*\|\s*bouwen met staal\s+(\d{1,3})", txt, flags=re.I
+                )
                 if m:
                     # parse issue number
                     try:
@@ -653,7 +657,7 @@ def extract_magazine_from_toc(doc, toc_page_index, articles):
                 nums = re.findall(r"\b(\d{1,3})\b", c["text"])
                 if nums:
                     try:
-                        toc_printed_page = int(nums[-1])+1
+                        toc_printed_page = int(nums[-1]) + 1
                         break
                     except:
                         continue
@@ -678,7 +682,7 @@ def extract_magazine_from_toc(doc, toc_page_index, articles):
 # ---------- parse a single column into articles ----------
 
 
-def parse_column(lines: List[TocLine], section: str) -> List[ArticleInfo]:
+def parse_column(lines: List[TocLine], section: str) -> List[Article]:
     """
     Parse one TOC column (either Projecten or Techniek) into ArticleInfo objects.
 
@@ -705,61 +709,68 @@ def parse_column(lines: List[TocLine], section: str) -> List[ArticleInfo]:
     # but excludes the distant footer text.
     MAX_AUTHOR_VERTICAL_GAP = 80.0
 
-    articles: List[ArticleInfo] = []
-    cur: Optional[ArticleInfo] = None
+    articles_in_column: List[Article] = []
+    current: Optional[Article] = None
 
     # Track the vertical position of the last header line (title or subtitle)
     # for the current article. Author lines must stay close to this anchor.
     current_header_y: Optional[float] = None
 
     for ln in lines:
-        role = classify_role(ln)  # unchanged
+        tocline_type = determin_tocline_type(ln)  # unchanged
         raw_txt = ln.text.strip()
 
+        
+
         if raw_txt == "NIEUWS":
+            
             # Edge case: skip "NIEUWS" line that appears in some TOC, NIEUW does not follow the format of the articles
             continue
 
-        if role == "title":
+        if tocline_type is TOClineType.CHAPOT:
+            if raw_txt.isdigit():
+            # This is a page number
+                if current is not None:
+                    articles_in_column.append(current)
+                current = Article(section=section)
             page_num, title_txt = split_page_prefix(raw_txt)
-
-            if cur is None:
+            if current is None:
                 # start first article in this section
-                cur = ArticleInfo(section=section)
+                current = Article(section=section)
             else:
                 # Als huidige artikel al een titel heeft én (subtitel of auteur),
                 # dan is dit waarschijnlijk een nieuw artikel.
-                if cur.chapot and (cur.title or cur.author):
-                    articles.append(cur)
-                    cur = ArticleInfo(section=section)
+                if current.chapot and (current.title or current.author):
+                    articles_in_column.append(current)
+                    current = Article(section=section)
 
             # zet paginanummer (alleen als nog niet gezet)
-            if page_num is not None and cur.page is None:
-                cur.page = page_num
+            if page_num is not None and current.page is None:
+                current.page = page_num
 
             # voeg titel toe (multi-line titels worden samengevoegd)
-            if cur.chapot:
-                cur.chapot = (cur.chapot + " " + title_txt).strip()
+            if current.chapot:
+                current.chapot = (current.chapot + " " + title_txt).strip()
             else:
-                cur.chapot = title_txt
+                current.chapot = title_txt
 
             # update header anchor for this article
             current_header_y = ln.y_top
 
-        elif role == "subtitle":
-            if cur is None:
-                cur = ArticleInfo(section=section)
-            if cur.title:
-                cur.title = (cur.title + " " + raw_txt).strip()
+        elif tocline_type is TOClineType.TITLE:
+            if current is None:
+                current = Article(section=section)
+            if current.title:
+                current.title = (current.title + " " + raw_txt).strip()
             else:
-                cur.title = raw_txt
+                current.title = raw_txt
 
             # subtitle also acts as the nearest header anchor
             current_header_y = ln.y_top
 
-        elif role == "author":
-            if cur is None:
-                cur = ArticleInfo(section=section)
+        elif tocline_type is TOClineType.AUTHOR:
+            if current is None:
+                current = Article(section=section)
 
             # New: enforce maximum vertical distance from last header line.
             # If the candidate author line is too far below the last title/
@@ -771,19 +782,19 @@ def parse_column(lines: List[TocLine], section: str) -> List[ArticleInfo]:
                     # too far away from the article header -> ignore
                     continue
 
-            if cur.author:
-                cur.author = (cur.author + " " + raw_txt).strip()
+            if current.author:
+                current.author = (current.author + " " + raw_txt).strip()
             else:
-                cur.author = raw_txt
+                current.author = raw_txt
 
         else:
             # 'other' -> negeren
             continue
 
-    if cur is not None:
-        articles.append(cur)
+    if current is not None:
+        articles_in_column.append(current)
 
-    return articles
+    return articles_in_column
 
 
 def split_authors_text(author_text: str) -> List[str]:
@@ -840,7 +851,7 @@ def build_magazine_from_pdf(doc):
     if editionnumber == 307:
         left_half_str = "tornado"
         right_half_str = "projecten"
-    elif editionnumber ==288:
+    elif editionnumber == 288:
         left_half_str = "rubrieken"
         right_half_str = "techniek"
         previous_page_str = "projecten"
@@ -860,10 +871,14 @@ def build_magazine_from_pdf(doc):
     elif editionnumber == 258:
         left_half_str = "zandhazenbrug"
         right_half_str = "projecten"
-    elif editionnumber == 255: #TODO: onderstaande tags zijn al artikelen maar worden niet herkent aangezien hij wsl iets lager begint met zoeken
+    elif (
+        editionnumber == 255
+    ):  # TODO: onderstaande tags zijn al artikelen maar worden niet herkent aangezien hij wsl iets lager begint met zoeken
         left_half_str = "aansprakelijkheid van de mijnbouw"
         right_half_str = "versterken en bouwkundig detailleren"
-    elif editionnumber == 254: #TODO: deze werkt niet omdat de paginas van de TOC zijn ingescand
+    elif (
+        editionnumber == 254
+    ):  # TODO: deze werkt niet omdat de paginas van de TOC zijn ingescand
         left_half_str = "utrecht centraal"
         right_half_str = "utrecht centraal"
     elif editionnumber == 251:
@@ -888,16 +903,15 @@ def build_magazine_from_pdf(doc):
         right_half_str = "Visie"
         previous_page_str = "vereniging"
 
-        
-
     toc_page = find_toc(doc, left_half_str, right_half_str)
 
-    if editionnumber == 266:#TODO: dit werkt niet ook issue maand en jaar moet gevonden worden 
+    if (
+        editionnumber == 266
+    ):  # TODO: dit werkt niet ook issue maand en jaar moet gevonden worden
         toc_page = 4
     elif editionnumber == 261:
         toc_page = 4
 
-    
     if toc_page is None:
         raise ValueError(f"BMS-{editionnumber}, Geen TOC-pagina gevonden.")
 
@@ -905,12 +919,10 @@ def build_magazine_from_pdf(doc):
     page = doc[toc_page]
     pw, ph = page.rect.width, page.rect.height
 
-    
-
     left_header_y = find_header_y(lines, left_half_str)
     right_header_y = find_header_y(lines, right_half_str)
     if left_half_str == right_half_str:
-        right_header_y = left_header_y 
+        right_header_y = left_header_y
 
     proj_lines = [
         ln for ln in lines if ln.x_center <= pw * 0.5 and ln.y_top > left_header_y
@@ -922,8 +934,8 @@ def build_magazine_from_pdf(doc):
     projecten_articles = parse_column(proj_lines, left_half_str)
     techniek_articles = parse_column(tech_lines, right_half_str)
 
-    lines = collect_toc_lines(doc, toc_page-1)
-    page = doc[toc_page-1]
+    lines = collect_toc_lines(doc, toc_page - 1)
+    page = doc[toc_page - 1]
     pw, ph = page.rect.width, page.rect.height
     rubrieken_header_y = find_header_y(lines, previous_page_str)
     rubriek_lines = [
@@ -932,7 +944,7 @@ def build_magazine_from_pdf(doc):
     rubriek_articles = parse_column(rubriek_lines, previous_page_str)
 
     # parse authors
-    all_articles = rubriek_articles+ projecten_articles + techniek_articles
+    all_articles = rubriek_articles + projecten_articles + techniek_articles
     for art in all_articles:
         if art.author:
             art.authors = split_authors_text(art.author)

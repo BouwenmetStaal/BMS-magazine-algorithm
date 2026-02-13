@@ -34,7 +34,7 @@ from typing import Optional
 
 import fitz  # PyMuPDF
 
-from bms_toc import build_magazine_from_pdf, ArticleInfo, Magazine
+from bms_toc import build_magazine_from_pdf, Article, Magazine
 from bms_article_text import extract_article_text_plain
 import json
 import pandas as pd
@@ -67,7 +67,7 @@ def sanitize_for_excel(value):
 # ---------------------------------------------------------------------------
 
 
-def build_article_metadata(magazine: Magazine, article: ArticleInfo) -> str:
+def build_article_metadata(magazine: Magazine, article: Article) -> str:
     """
     Build the human-readable metadata header for one article.
 
@@ -476,7 +476,6 @@ def main() -> None:
 
     # ------------------ Locatie aanpassen --------------------------
 
-    
     # Get all subdirectories in the archive folder
     archive_root = Path(
         r"C:\Users\AJOR\Bouwen met Staal\ChatBmS - General\Magazine_compleet_archief"
@@ -491,11 +490,11 @@ def main() -> None:
     # For testing, process only the latest year folder
     year_folders = year_folders
 
-    # year_folders = [
-    #     Path(
-    #         r"C:\Users\AJOR\Bouwen met Staal\ChatBmS - General\Magazine_compleet_archief\2007 (195-200)"
-    #     )
-    # ]
+    year_folders = [
+        Path(
+            r"C:\Users\AJOR\Bouwen met Staal\ChatBmS - General\Magazine_compleet_archief\2009 (207-212)"
+        )
+    ]
 
     # Process each year folder
     for magazine_dir in year_folders:
@@ -523,10 +522,16 @@ def main() -> None:
 
         for pdf_path in pdf_files:
             edition = int(pdf_path.stem.split("_")[0])
-            if edition in [249, 248, 231]: #TOC heeft andere format, geen woorden zoals techniek en projecten
-                continue  
-            #elif edition in [266, 261, 245, 206, 204, 203, 199, 197, 196, 194]:
-             #   continue  # toc heeft geen pagina nummer en regel met editie metadata ontbreekt, op basis van vorig pagina zoeken?
+            if edition in [212]:  # voor testen 211
+                continue
+            if edition in [
+                249,
+                248,
+                231,
+            ]:  # TOC heeft andere format, geen woorden zoals techniek en projecten
+                continue
+            # elif edition in [266, 261, 245, 206, 204, 203, 199, 197, 196, 194]:
+            #   continue  # toc heeft geen pagina nummer en regel met editie metadata ontbreekt, op basis van vorig pagina zoeken?
             pdf_status = str(pdf_path.stem).split("_")[-1]
             if pdf_status == "Staalprijs":
                 staalprijs_data = pd.DataFrame(
@@ -560,9 +565,9 @@ def main() -> None:
         status_df[col] = status_df[col].apply(sanitize_for_excel)
 
     excel_output_path = base_output_dir / "extraction_status.xlsx"
-    with pd.ExcelWriter(excel_output_path, engine='openpyxl') as writer:
+    with pd.ExcelWriter(excel_output_path, engine="openpyxl") as writer:
         status_df.to_excel(writer, index=False)
-        worksheet = writer.sheets['Sheet1']
+        worksheet = writer.sheets["Sheet1"]
         for column in worksheet.columns:
             worksheet.column_dimensions[column[0].column_letter].width = 32
     print(f"\n[INFO] Status data saved to: {excel_output_path}")
