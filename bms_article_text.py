@@ -65,6 +65,7 @@ class ArticlePageLine:
     text: str
     bbox: Tuple[float, float, float, float]
     x_center: float
+    x_left: float
     y_top: float
     max_font_size: float
     has_univers: bool
@@ -230,6 +231,7 @@ def collect_page_lines(page: fitz.Page, page_index: int) -> List[ArticlePageLine
             y1 = max(ye or [0])
 
             x_center = 0.5 * (x0 + x1)
+            x_left = x0
             y_top = y0
 
             lines.append(
@@ -238,6 +240,7 @@ def collect_page_lines(page: fitz.Page, page_index: int) -> List[ArticlePageLine
                     text=text,
                     bbox=(x0, y0, x1, y1),
                     x_center=x_center,
+                    x_left=x_left,
                     y_top=y_top,
                     max_font_size=max_size,
                     has_univers=has_univers,
@@ -308,26 +311,26 @@ def assign_columns(lines: List[ArticlePageLine]) -> None:
         anchors = list(lines)
 
     # 3) Determine column centers from anchor lines only
-    anchors_sorted = sorted(anchors, key=lambda ln: ln.x_center)
-    centers: List[float] = []
+    anchors_sorted = sorted(anchors, key=lambda ln: ln.x_left)
+    lefts: List[float] = []
 
     for ln in anchors_sorted:
-        x = ln.x_center
-        if not centers:
-            centers.append(x)
+        x = ln.x_left
+        if not lefts:
+            lefts.append(x)
         else:
             # new column only if far from all existing centers
-            if all(abs(x - c) > COLUMN_GAP_THRESHOLD for c in centers):
-                centers.append(x)
+            if all(abs(x - c) > COLUMN_GAP_THRESHOLD for c in lefts):
+                lefts.append(x)
 
     # Safety: cap at 3 columns and ensure at least one center
-    if not centers:
-        centers = [anchors_sorted[0].x_center]
-    centers = centers[:3]
+    if not lefts:
+        lefts = [anchors_sorted[0].x_left]
+    lefts = lefts[:3]
 
     # 4) Assign each line to the nearest center
     for ln in lines:
-        distances = [abs(ln.x_center - c) for c in centers]
+        distances = [abs(ln.x_left - c) for c in lefts]
         ln.column_index = distances.index(min(distances))
 
 
@@ -472,6 +475,8 @@ def extract_article_blocks(
     last_page_with_content: Optional[int] = None
 
     for page_index in range(start_index, len(doc)):
+        if "Luchtkasteel met perspectief" in article.title:
+            pass
         page = doc[page_index]
         all_lines = collect_page_lines(page, page_index)
 

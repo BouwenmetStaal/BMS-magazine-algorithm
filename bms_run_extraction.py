@@ -373,6 +373,7 @@ def process_magazine_pdf(pdf_path: Path, base_output_dir: Path) -> pd.DataFrame:
                 "printed_page_end": article.end_page,
                 "pdf_page_start_index": article.start_page_pdf,
                 "pdf_page_end_index": article.end_page_pdf,
+                "number_of_words": article.article_text.count_words() if article.article_text else 0,
             },
             "text": {
                 "intro": article.article_text.intro_text,
@@ -422,6 +423,8 @@ def process_magazine_pdf(pdf_path: Path, base_output_dir: Path) -> pd.DataFrame:
                     )
                 ],
                 "hyphens_per_1000": hy_per_1000,
+                "number_of_words": article.article_text.count_words() if article.article_text else 0,
+                "text": article.article_text.to_string() if article.article_text else "",
             }
         )
 
@@ -492,7 +495,7 @@ def main() -> None:
 
     year_folders = [
         Path(
-            r"C:\Users\AJOR\Bouwen met Staal\ChatBmS - General\Magazine_compleet_archief\2009 (207-212)"
+            r"C:\Users\AJOR\Bouwen met Staal\ChatBmS - General\Magazine_compleet_archief\2025 (303-308)"
         )
     ]
 
@@ -522,8 +525,6 @@ def main() -> None:
 
         for pdf_path in pdf_files:
             edition = int(pdf_path.stem.split("_")[0])
-            if edition in [212]:  # voor testen 211
-                continue
             if edition in [
                 249,
                 248,

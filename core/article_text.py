@@ -22,10 +22,20 @@ class ArticleText:
 
 
     def to_string(self) -> str:
-        result = self.intro_text + "\n\n"
-        result += self.first_paragraph + "\n\n"
+        text = ""
+        text += self.intro_text + "\n\n" if self.intro_text else ""
+        text += self.first_paragraph + "\n\n" if self.first_paragraph else ""
         for paragraph in self.paragraph_texts:
             if paragraph.header:
-                result += paragraph.header + "\n"
-            result += paragraph.text + "\n\n"
-        return result.strip()
+                text += paragraph.header + "\n" if paragraph.header else ""
+            text += paragraph.text + "\n\n" if paragraph.text else ""
+        return text.strip()
+    
+    def count_words(self) -> int:
+        total_words = 0
+        total_words += len(self.intro_text.split())  if self.intro_text else 0
+        total_words += len(self.first_paragraph.split()) if self.first_paragraph else 0
+        for paragraph in self.paragraph_texts:
+            total_words += len(paragraph.header.split()) if paragraph.header else 0
+            total_words += len(paragraph.text.split()) if paragraph.text else 0
+        return total_words

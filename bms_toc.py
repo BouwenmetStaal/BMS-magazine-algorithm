@@ -719,13 +719,10 @@ def parse_column(lines: List[TocLine], section: str) -> List[Article]:
     for ln in lines:
         tocline_type = determin_tocline_type(ln)  # unchanged
         raw_txt = ln.text.strip()
-
-        
-
-        if raw_txt == "NIEUWS":
+        # if raw_txt == "NIEUWS":
             
-            # Edge case: skip "NIEUWS" line that appears in some TOC, NIEUW does not follow the format of the articles
-            continue
+        #     # Edge case: skip "NIEUWS" line that appears in some TOC, NIEUW does not follow the format of the articles
+        #     continue
 
         if tocline_type is TOClineType.CHAPOT:
             if raw_txt.isdigit():
@@ -948,6 +945,8 @@ def build_magazine_from_pdf(doc):
     for art in all_articles:
         if art.author:
             art.authors = split_authors_text(art.author)
+
+    all_articles.sort(key=lambda art: art.page if art.page is not None else float('inf'))
 
     # build Magazine object
     magazine = extract_magazine_from_toc(doc, toc_page, all_articles)
